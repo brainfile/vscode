@@ -1,12 +1,12 @@
 {
-  "name": "bangbang",
-  "displayName": "BangBang",
+  "name": "brainfile",
+  "displayName": "Brainfile",
   "description": "Task management protocol for AI-assisted development",
   "version": "0.4.3",
-  "publisher": "bangbang",
+  "publisher": "brainfile",
   "repository": {
     "type": "git",
-    "url": "https://github.com/1broseidon/bangbang"
+    "url": "https://github.com/brainfile/vscode"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -15,61 +15,69 @@
     "Other"
   ],
   "activationEvents": [
-    "workspaceContains:**/bangbang.md",
-    "workspaceContains:**/.bangbang.md"
+    "workspaceContains:**/brainfile.md",
+    "workspaceContains:**/.brainfile.md"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "bangbang.refresh",
-        "title": "BangBang: Refresh",
+        "command": "brainfile.refresh",
+        "title": "Brainfile: Refresh",
         "icon": "$(refresh)"
       },
       {
-        "command": "bangbang.createBoard",
-        "title": "BangBang: Create Board",
+        "command": "brainfile.createBoard",
+        "title": "Brainfile: Create Board",
         "icon": "$(add)"
       },
       {
-        "command": "bangbang.addTask",
-        "title": "BangBang: Add Task",
+        "command": "brainfile.addTask",
+        "title": "Brainfile: Add Task",
         "icon": "$(add)"
+      },
+      {
+        "command": "brainfile.createFromTemplate",
+        "title": "Brainfile: Create Task from Template",
+        "icon": "$(file-code)"
       }
     ],
     "keybindings": [
       {
-        "command": "bangbang.addTask",
+        "command": "brainfile.addTask",
         "key": "ctrl+shift+t",
         "mac": "cmd+shift+t",
-        "when": "bangbang.boardActive"
+        "when": "brainfile.boardActive"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "bangbang-sidebar",
-          "title": "BangBang",
+          "id": "brainfile-sidebar",
+          "title": "Brainfile",
           "icon": "$(checklist)"
         }
       ]
     },
     "views": {
-      "bangbang-sidebar": [
+      "brainfile-sidebar": [
         {
           "type": "webview",
-          "id": "bangbang.tasksView",
+          "id": "brainfile.tasksView",
           "name": "Tasks",
-          "contextualTitle": "BangBang Tasks"
+          "contextualTitle": "Brainfile Tasks"
         }
       ]
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "package": "vsce package",
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && node esbuild.js --production",
+    "check-types": "tsc --noEmit",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
     "test": "node ./out/test/runTest.js"
@@ -81,10 +89,13 @@
     "@typescript-eslint/eslint-plugin": "^6.x",
     "@typescript-eslint/parser": "^6.x",
     "@vscode/vsce": "^3.7.0",
+    "esbuild": "^0.27.0",
     "eslint": "^8.x",
+    "npm-run-all": "^4.1.5",
     "typescript": "^5.3.0"
   },
   "dependencies": {
+    "@brainfile/core": "file:../packages/brainfile-core",
     "@types/marked": "^5.0.2",
     "js-yaml": "^4.1.0",
     "marked": "^17.0.0"

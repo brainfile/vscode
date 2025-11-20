@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { BoardViewProvider } from './boardViewProvider';
 
-const LOG_PREFIX = '[BangBang]';
+const LOG_PREFIX = '[Brainfile]';
 
 export function log(...args: any[]) {
   console.log(LOG_PREFIX, ...args);
@@ -32,33 +32,40 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Register commands
     context.subscriptions.push(
-      vscode.commands.registerCommand('bangbang.refresh', () => {
+      vscode.commands.registerCommand('brainfile.refresh', () => {
         log('Refreshing tasks');
         provider.refresh();
       })
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand('bangbang.createBoard', () => {
-        log('Creating new BangBang board');
+      vscode.commands.registerCommand('brainfile.createBoard', () => {
+        log('Creating new Brainfile board');
         provider.createBoard();
       })
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand('bangbang.addTask', () => {
+      vscode.commands.registerCommand('brainfile.addTask', () => {
         log('Quick adding task');
         provider.quickAddTask();
       })
     );
 
+    context.subscriptions.push(
+      vscode.commands.registerCommand('brainfile.createFromTemplate', () => {
+        log('Creating task from template');
+        provider.createFromTemplate();
+      })
+    );
+
     // Set context for keybinding
-    vscode.commands.executeCommand('setContext', 'bangbang.boardActive', true);
+    vscode.commands.executeCommand('setContext', 'brainfile.boardActive', true);
 
     log('All providers and commands registered');
   } catch (error) {
     log('Error activating extension:', error);
-    vscode.window.showErrorMessage('Failed to activate BangBang extension');
+    vscode.window.showErrorMessage('Failed to activate Brainfile extension');
   }
 }
 

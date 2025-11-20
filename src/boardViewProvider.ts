@@ -1,13 +1,27 @@
-import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs';
-import { marked } from 'marked';
-import { BangBangParser } from './parser';
-import { Board, Subtask } from './types';
-import { log } from './extension';
+import * as fs from "fs";
+import { marked } from "marked";
+import * as path from "path";
+import * as vscode from "vscode";
+import { log } from "./extension";
+import {
+  BrainfileParser,
+  BrainfileSerializer,
+  Board,
+  Subtask,
+  TaskTemplate,
+  Task,
+  BUILT_IN_TEMPLATES,
+  processTemplate,
+  generateTaskId
+} from "@brainfile/core";
+
+// Read package.json for version info
+const packageJson = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")
+);
 
 export class BoardViewProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = 'bangbang.tasksView';
+  public static readonly viewType = "brainfile.tasksView";
 
   private _view?: vscode.WebviewView;
   private _boardFilePath?: string;
@@ -23,16 +37,14 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
   private _lastValidBoard?: Board;
   private _parseErrorCount: number = 0;
 
-  constructor(
-    private readonly _extensionUri: vscode.Uri,
-  ) {}
+  constructor(private readonly _extensionUri: vscode.Uri) {}
 
   /**
    * Debounced write to prevent file conflicts when multiple agents/humans edit simultaneously
    */
   private debouncedWrite(content: string, callback?: () => void) {
     if (!this._boardFilePath) {
-      log('No board file path for write');
+      log("No board file path for write");
       return;
     }
 
@@ -49,18 +61,27 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
       if (this._pendingWrite && this._boardFilePath) {
         try {
           // Check if file has changed externally before writing
-          const currentContent = fs.readFileSync(this._boardFilePath, 'utf8');
+          const currentContent = fs.readFileSync(this._boardFilePath, "utf8");
           const currentHash = this.hashContent(currentContent);
 
           // If file changed externally and differs from our pending write
-          if (currentHash !== this._lastContentHash && currentHash !== this.hashContent(this._pendingWrite.content)) {
-            log('File changed externally, attempting merge');
+          if (
+            currentHash !== this._lastContentHash &&
+            currentHash !== this.hashContent(this._pendingWrite.content)
+          ) {
+            log("File changed externally, attempting merge");
             // For now, just warn - could implement merge logic later
-            vscode.window.showWarningMessage('Board file was modified externally. Your changes may conflict.');
+            vscode.window.showWarningMessage(
+              "Board file was modified externally. Your changes may conflict."
+            );
           }
 
           // Write the file
-          fs.writeFileSync(this._boardFilePath, this._pendingWrite.content, 'utf8');
+          fs.writeFileSync(
+            this._boardFilePath,
+            this._pendingWrite.content,
+            "utf8"
+          );
           this._lastContentHash = this.hashContent(this._pendingWrite.content);
 
           // Execute callback if provided
@@ -68,8 +89,8 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
             this._pendingWrite.callback();
           }
         } catch (error) {
-          log('Error in debounced write:', error);
-          vscode.window.showErrorMessage('Failed to save board changes');
+          log("Error in debounced write:", error);
+          vscode.window.showErrorMessage("Failed to save board changes");
         }
 
         this._pendingWrite = undefined;
@@ -84,52 +105,53 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
   public async createBoard() {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders) {
-      vscode.window.showErrorMessage('No workspace folder open');
+      vscode.window.showErrorMessage("No workspace folder open");
       return;
     }
 
     const rootPath = workspaceFolders[0].uri.fsPath;
-    const bangbangPath = path.join(rootPath, 'bangbang.md');
+    const brainfilePath = path.join(rootPath, "brainfile.md");
 
     // Check if file already exists
-    if (fs.existsSync(bangbangPath)) {
+    if (fs.existsSync(brainfilePath)) {
       const answer = await vscode.window.showWarningMessage(
-        'bangbang.md already exists. Overwrite?',
-        'Yes', 'No'
+        "brainfile.md already exists. Overwrite?",
+        "Yes",
+        "No"
       );
-      if (answer !== 'Yes') {
+      if (answer !== "Yes") {
         return;
       }
     }
 
-    await this.createDefaultBangBangFile(bangbangPath);
+    await this.createDefaultBrainfileFile(brainfilePath);
     this.updateView();
   }
 
   public async quickAddTask() {
     if (!this._boardFilePath) {
-      vscode.window.showErrorMessage('No BangBang board found');
+      vscode.window.showErrorMessage("No Brainfile board found");
       return;
     }
 
     // Get column options
-    const content = fs.readFileSync(this._boardFilePath, 'utf8');
-    const board = BangBangParser.parse(content);
+    const content = fs.readFileSync(this._boardFilePath, "utf8");
+    const board = BrainfileParser.parse(content);
     if (!board) {
-      vscode.window.showErrorMessage('Failed to parse board');
+      vscode.window.showErrorMessage("Failed to parse board");
       return;
     }
 
     // Quick input for task title
     const title = await vscode.window.showInputBox({
-      prompt: 'Task title',
-      placeHolder: 'Enter task title',
+      prompt: "Task title",
+      placeHolder: "Enter task title",
       validateInput: (value) => {
         if (!value || value.trim().length === 0) {
-          return 'Task title is required';
+          return "Task title is required";
         }
         return null;
-      }
+      },
     });
 
     if (!title) {
@@ -137,46 +159,188 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
     }
 
     // Quick pick for column selection
-    const columnOptions = board.columns.map(col => ({
+    const columnOptions = board.columns.map((col) => ({
       label: col.title,
       description: `${col.tasks.length} tasks`,
-      id: col.id
+      id: col.id,
     }));
 
     const selectedColumn = await vscode.window.showQuickPick(columnOptions, {
-      placeHolder: 'Select column (default: To Do)',
-      canPickMany: false
+      placeHolder: "Select column (default: To Do)",
+      canPickMany: false,
     });
 
-    const columnId = selectedColumn?.id || 'todo';
+    const columnId = selectedColumn?.id || "todo";
 
     // Optional description
     const description = await vscode.window.showInputBox({
-      prompt: 'Task description (optional)',
-      placeHolder: 'Enter task description (supports markdown)'
+      prompt: "Task description (optional)",
+      placeHolder: "Enter task description (supports markdown)",
     });
 
     // Generate next task ID
-    const allTaskIds = board.columns.flatMap(col =>
-      col.tasks.map(t => parseInt(t.id.replace('task-', '')) || 0)
+    const allTaskIds = board.columns.flatMap((col) =>
+      col.tasks.map((t) => parseInt(t.id.replace("task-", "")) || 0)
     );
     const maxId = Math.max(0, ...allTaskIds);
     const newTaskId = `task-${maxId + 1}`;
 
     // Add task to the selected column
-    const column = board.columns.find(col => col.id === columnId);
+    const column = board.columns.find((col) => col.id === columnId);
     if (column) {
       column.tasks.push({
         id: newTaskId,
         title: title.trim(),
-        description: description?.trim() || ''
+        description: description?.trim() || "",
       });
 
       // Save the updated board with debouncing
-      const newContent = BangBangParser.serialize(board);
+      const newContent = BrainfileSerializer.serialize(board);
       this.debouncedWrite(newContent, () => {
         log(`Quick added task ${newTaskId} to column ${columnId}`);
-        vscode.window.showInformationMessage(`Added task "${title}" to ${column.title}`);
+        vscode.window.showInformationMessage(
+          `Added task "${title}" to ${column.title}`
+        );
+      });
+
+      // Update the view
+      this.updateView();
+    }
+  }
+
+  // Template Management Methods
+  private getTemplateStorageKey(): string {
+    return "brainfile.userTemplates";
+  }
+
+  public getUserTemplates(): TaskTemplate[] {
+    const config = vscode.workspace.getConfiguration();
+    const templates = config.get<TaskTemplate[]>(this.getTemplateStorageKey());
+    return templates || [];
+  }
+
+  public async saveUserTemplates(templates: TaskTemplate[]): Promise<void> {
+    const config = vscode.workspace.getConfiguration();
+    await config.update(
+      this.getTemplateStorageKey(),
+      templates,
+      vscode.ConfigurationTarget.Workspace
+    );
+  }
+
+  public getAllTemplates(): TaskTemplate[] {
+    const userTemplates = this.getUserTemplates();
+    return [...BUILT_IN_TEMPLATES, ...userTemplates];
+  }
+
+  public async createFromTemplate() {
+    if (!this._boardFilePath) {
+      vscode.window.showErrorMessage("No Brainfile board found");
+      return;
+    }
+
+    // Get all available templates
+    const templates = this.getAllTemplates();
+    if (templates.length === 0) {
+      vscode.window.showErrorMessage("No templates available");
+      return;
+    }
+
+    // Show template picker
+    const templateOptions = templates.map((template) => ({
+      label: template.name,
+      description: template.description,
+      detail: template.isBuiltIn ? "Built-in template" : "User template",
+      template: template,
+    }));
+
+    const selectedTemplate = await vscode.window.showQuickPick(
+      templateOptions,
+      {
+        placeHolder: "Select a template",
+        canPickMany: false,
+      }
+    );
+
+    if (!selectedTemplate) {
+      return;
+    }
+
+    const template = selectedTemplate.template;
+    const variableValues: Record<string, string> = {};
+
+    // Collect variable values if template has variables
+    if (template.variables && template.variables.length > 0) {
+      for (const variable of template.variables) {
+        const value = await vscode.window.showInputBox({
+          prompt: variable.description,
+          placeHolder: variable.defaultValue || `Enter ${variable.name}`,
+          validateInput: (value) => {
+            if (variable.required && (!value || value.trim().length === 0)) {
+              return `${variable.name} is required`;
+            }
+            return null;
+          },
+        });
+
+        if (value === undefined) {
+          // User cancelled
+          return;
+        }
+
+        variableValues[variable.name] = value || variable.defaultValue || "";
+      }
+    }
+
+    // Process the template with variable substitution
+    const processedTask = processTemplate(template, variableValues);
+
+    // Get column selection
+    const content = fs.readFileSync(this._boardFilePath, "utf8");
+    const board = BrainfileParser.parse(content);
+    if (!board) {
+      vscode.window.showErrorMessage("Failed to parse board");
+      return;
+    }
+
+    const columnOptions = board.columns.map((col) => ({
+      label: col.title,
+      description: `${col.tasks.length} tasks`,
+      id: col.id,
+    }));
+
+    const selectedColumn = await vscode.window.showQuickPick(columnOptions, {
+      placeHolder: "Select column for new task",
+      canPickMany: false,
+    });
+
+    const columnId = selectedColumn?.id || "todo";
+
+    // Generate next task ID
+    const allTaskIds = board.columns.flatMap((col) =>
+      col.tasks.map((t) => parseInt(t.id.replace("task-", "")) || 0)
+    );
+    const maxId = Math.max(0, ...allTaskIds);
+    const newTaskId = `task-${maxId + 1}`;
+
+    // Create the new task with the generated ID
+    const newTask: Task = {
+      id: newTaskId,
+      ...processedTask,
+    } as Task;
+
+    // Add task to the selected column
+    const column = board.columns.find((col) => col.id === columnId);
+    if (column) {
+      column.tasks.push(newTask);
+
+      // Save the updated board
+      const newContent = BrainfileSerializer.serialize(board);
+      this.debouncedWrite(newContent, () => {
+        log(`Created task ${newTaskId} from template ${template.name}`);
+        vscode.window.showInformationMessage(
+          `Created task "${newTask.title}" from template "${template.name}"`
+        );
       });
 
       // Update the view
@@ -187,9 +351,9 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
-    _token: vscode.CancellationToken,
+    _token: vscode.CancellationToken
   ) {
-    log('Resolving webview view');
+    log("Resolving webview view");
     this._view = webviewView;
 
     // When webview is moved between panes, it gets recreated
@@ -198,58 +362,80 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [this._extensionUri]
+      localResourceRoots: [this._extensionUri],
     };
 
-    // Find bangbang.md file
-    this.findBangBangFile().then(() => {
-      log('Board file found:', this._boardFilePath);
+    // Find brainfile.md file
+    this.findBrainfileFile().then(() => {
+      log("Board file found:", this._boardFilePath);
       this.updateView();
       this.watchFile();
     });
 
     // Handle messages from webview
-    webviewView.webview.onDidReceiveMessage(data => {
-      log('Received message from webview:', data.type, data);
+    webviewView.webview.onDidReceiveMessage((data) => {
+      log("Received message from webview:", data.type, data);
       switch (data.type) {
-        case 'updateTask':
-          this.handleUpdateTask(data.columnId, data.taskId, data.title, data.description);
+        case "updateTask":
+          this.handleUpdateTask(
+            data.columnId,
+            data.taskId,
+            data.title,
+            data.description
+          );
           break;
-        case 'editTask':
+        case "editTask":
           this.handleEditTask(data.taskId);
           break;
-        case 'deleteTask':
+        case "deleteTask":
           this.handleDeleteTask(data.columnId, data.taskId);
           break;
-        case 'moveTask':
-          this.handleMoveTask(data.taskId, data.fromColumn, data.toColumn, data.toIndex);
+        case "moveTask":
+          this.handleMoveTask(
+            data.taskId,
+            data.fromColumn,
+            data.toColumn,
+            data.toIndex
+          );
           break;
-        case 'updateTitle':
+        case "updateTitle":
           this.handleUpdateTitle(data.title);
           break;
-        case 'openFile':
+        case "openFile":
           this.handleOpenFile(data.filePath);
           break;
-        case 'clearCache':
+        case "clearCache":
           this.handleClearCache();
           break;
-        case 'archiveTask':
+        case "archiveTask":
           this.handleArchiveTask(data.columnId, data.taskId);
           break;
-        case 'addTaskToColumn':
+        case "addTaskToColumn":
           this.handleAddTaskToColumn(data.columnId);
           break;
-        case 'toggleSubtask':
+        case "addRule":
+          this.handleAddRule(data.ruleType);
+          break;
+        case "editRule":
+          this.handleEditRule(data.ruleId, data.ruleType);
+          break;
+        case "deleteRule":
+          this.handleDeleteRule(data.ruleId, data.ruleType);
+          break;
+        case "toggleSubtask":
           this.handleToggleSubtask(data.taskId, data.subtaskId);
           break;
-        case 'saveStatsConfig':
+        case "saveStatsConfig":
           this.handleSaveStatsConfig(data.columns);
+          break;
+        case "createFromTemplate":
+          this.createFromTemplate();
           break;
       }
     });
   }
 
-  private async findBangBangFile() {
+  private async findBrainfileFile() {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders) {
       return;
@@ -257,32 +443,32 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
 
     const rootPath = workspaceFolders[0].uri.fsPath;
 
-    // Check for non-hidden bangbang.md first (new default)
-    const nonHiddenPath = path.join(rootPath, 'bangbang.md');
+    // Check for non-hidden brainfile.md first (new default)
+    const nonHiddenPath = path.join(rootPath, "brainfile.md");
     if (fs.existsSync(nonHiddenPath)) {
       this._boardFilePath = nonHiddenPath;
       return;
     }
 
-    // Check for hidden .bangbang.md (backward compatibility)
-    const hiddenPath = path.join(rootPath, '.bangbang.md');
+    // Check for hidden .brainfile.md (backward compatibility)
+    const hiddenPath = path.join(rootPath, ".brainfile.md");
     if (fs.existsSync(hiddenPath)) {
       this._boardFilePath = hiddenPath;
       return;
     }
 
     // Check for .bb.md (shorthand - backward compatibility)
-    const bbPath = path.join(rootPath, '.bb.md');
+    const bbPath = path.join(rootPath, ".bb.md");
     if (fs.existsSync(bbPath)) {
       this._boardFilePath = bbPath;
       return;
     }
 
-    // If no file exists, create default bangbang.md (non-hidden)
-    await this.createDefaultBangBangFile(nonHiddenPath);
+    // If no file exists, create default brainfile.md (non-hidden)
+    await this.createDefaultBrainfileFile(nonHiddenPath);
   }
 
-  private async createDefaultBangBangFile(filePath: string) {
+  private async createDefaultBrainfileFile(filePath: string) {
     try {
       const defaultContent = `---
 title: My Project
@@ -311,12 +497,14 @@ columns:
 ---
 `;
 
-      fs.writeFileSync(filePath, defaultContent, 'utf8');
+      fs.writeFileSync(filePath, defaultContent, "utf8");
       this._boardFilePath = filePath;
 
       const fileName = path.basename(filePath);
       log(`Created default ${fileName} file`);
-      vscode.window.showInformationMessage(`Created ${fileName} with starter template`);
+      vscode.window.showInformationMessage(
+        `Created ${fileName} with starter template`
+      );
     } catch (error) {
       const fileName = path.basename(filePath);
       log(`Error creating default ${fileName}:`, error);
@@ -326,7 +514,7 @@ columns:
 
   private watchFile() {
     if (!this._boardFilePath) {
-      log('No board file to watch');
+      log("No board file to watch");
       return;
     }
 
@@ -334,7 +522,7 @@ columns:
 
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
-      log('No workspace folder found for watcher');
+      log("No workspace folder found for watcher");
       return;
     }
 
@@ -342,20 +530,25 @@ columns:
     const boardRelative = path.relative(rootPath, this._boardFilePath);
     const boardPattern = new vscode.RelativePattern(rootPath, boardRelative);
 
-    log('Setting up file watchers for:', this._boardFilePath);
+    log("Setting up file watchers for:", this._boardFilePath);
 
-    this._fileWatcher = vscode.workspace.createFileSystemWatcher(boardPattern, false, false, false);
+    this._fileWatcher = vscode.workspace.createFileSystemWatcher(
+      boardPattern,
+      false,
+      false,
+      false
+    );
     this._fileWatcher.onDidChange((uri) => {
-      log('Board file changed on disk:', uri.fsPath);
-      this.scheduleBoardRefresh('file-change', uri);
+      log("Board file changed on disk:", uri.fsPath);
+      this.scheduleBoardRefresh("file-change", uri);
     });
     this._fileWatcher.onDidCreate((uri) => {
-      log('Board file created:', uri.fsPath);
+      log("Board file created:", uri.fsPath);
       this._boardFilePath = uri.fsPath;
-      this.scheduleBoardRefresh('file-create', uri);
+      this.scheduleBoardRefresh("file-create", uri);
     });
     this._fileWatcher.onDidDelete(() => {
-      log('Board file deleted');
+      log("Board file deleted");
       this._boardFilePath = undefined;
       this.updateView(true);
     });
@@ -363,31 +556,41 @@ columns:
     const archivePath = this.getArchivePath();
     if (archivePath) {
       const archiveRelative = path.relative(rootPath, archivePath);
-      const archivePattern = new vscode.RelativePattern(rootPath, archiveRelative);
-      this._archiveWatcher = vscode.workspace.createFileSystemWatcher(archivePattern, false, false, false);
+      const archivePattern = new vscode.RelativePattern(
+        rootPath,
+        archiveRelative
+      );
+      this._archiveWatcher = vscode.workspace.createFileSystemWatcher(
+        archivePattern,
+        false,
+        false,
+        false
+      );
       this._archiveWatcher.onDidChange((uri) => {
-        log('Archive file changed on disk:', uri.fsPath);
-        this.scheduleBoardRefresh('archive-change', uri);
+        log("Archive file changed on disk:", uri.fsPath);
+        this.scheduleBoardRefresh("archive-change", uri);
       });
       this._archiveWatcher.onDidCreate((uri) => {
-        log('Archive file created:', uri.fsPath);
-        this.scheduleBoardRefresh('archive-create', uri);
+        log("Archive file created:", uri.fsPath);
+        this.scheduleBoardRefresh("archive-create", uri);
       });
       this._archiveWatcher.onDidDelete(() => {
-        log('Archive file deleted');
-        this.scheduleBoardRefresh('archive-delete');
+        log("Archive file deleted");
+        this.scheduleBoardRefresh("archive-delete");
       });
     }
 
-    this._textDocumentListener = vscode.workspace.onDidChangeTextDocument((event) => {
-      if (event.document.uri.fsPath === this._boardFilePath) {
-        log('Board document changed in editor');
-        this.scheduleBoardRefresh('document-change', event.document.uri);
+    this._textDocumentListener = vscode.workspace.onDidChangeTextDocument(
+      (event) => {
+        if (event.document.uri.fsPath === this._boardFilePath) {
+          log("Board document changed in editor");
+          this.scheduleBoardRefresh("document-change", event.document.uri);
+        }
       }
-    });
+    );
 
     // Trigger an initial refresh to sync hash state
-    this.scheduleBoardRefresh('initial-watch');
+    this.scheduleBoardRefresh("initial-watch");
   }
 
   private scheduleBoardRefresh(reason: string, _uri?: vscode.Uri) {
@@ -396,7 +599,7 @@ columns:
     }
 
     // Use longer debounce for document changes to allow users to finish typing
-    const debounceTime = reason === 'document-change' ? 500 : 150;
+    const debounceTime = reason === "document-change" ? 500 : 150;
 
     this._refreshTimer = setTimeout(() => {
       this.refreshBoardFromSource(reason);
@@ -405,7 +608,7 @@ columns:
 
   private async refreshBoardFromSource(reason: string) {
     if (!this._boardFilePath) {
-      log('No board file to refresh from');
+      log("No board file to refresh from");
       return;
     }
 
@@ -414,7 +617,7 @@ columns:
 
       const currentHash = this.hashContent(content);
       if (currentHash === this._lastContentHash) {
-        log('Refresh skipped - content hash unchanged');
+        log("Refresh skipped - content hash unchanged");
         return;
       }
 
@@ -422,26 +625,32 @@ columns:
       this._lastContentHash = currentHash;
       this.updateView(false, content);
     } catch (error) {
-      log('Error refreshing board from source:', error);
+      log("Error refreshing board from source:", error);
       // Only show error if it's not a file not found error (could be deleted)
-      if (error instanceof Error && !error.message.includes('ENOENT')) {
-        vscode.window.showErrorMessage(`Failed to refresh BangBang board: ${error.message}`);
+      if (error instanceof Error && !error.message.includes("ENOENT")) {
+        vscode.window.showErrorMessage(
+          `Failed to refresh Brainfile board: ${error.message}`
+        );
       }
     }
   }
 
   private async readBoardContent(): Promise<string> {
     if (!this._boardFilePath) {
-      throw new Error('No board file path set');
+      throw new Error("No board file path set");
     }
 
-    const openDoc = vscode.workspace.textDocuments.find(doc => doc.uri.fsPath === this._boardFilePath);
+    const openDoc = vscode.workspace.textDocuments.find(
+      (doc) => doc.uri.fsPath === this._boardFilePath
+    );
     if (openDoc) {
       return openDoc.getText();
     }
 
-    const data = await vscode.workspace.fs.readFile(vscode.Uri.file(this._boardFilePath));
-    return Buffer.from(data).toString('utf8');
+    const data = await vscode.workspace.fs.readFile(
+      vscode.Uri.file(this._boardFilePath)
+    );
+    return Buffer.from(data).toString("utf8");
   }
 
   private disposeWatchers() {
@@ -471,45 +680,49 @@ columns:
     let hash = 0;
     for (let i = 0; i < content.length; i++) {
       const char = content.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
+      hash = (hash << 5) - hash + char;
       hash = hash & hash; // Convert to 32bit integer
     }
     return hash.toString(16);
   }
 
-  private updateView(forceFullRefresh: boolean = false, contentOverride?: string) {
+  private updateView(
+    forceFullRefresh: boolean = false,
+    contentOverride?: string
+  ) {
     if (!this._view || !this._boardFilePath) {
-      log('Cannot update view - missing view or board file');
+      log("Cannot update view - missing view or board file");
       return;
     }
 
     try {
-      log('Updating tasks view');
-      const content = contentOverride ?? fs.readFileSync(this._boardFilePath, 'utf8');
-      const board = BangBangParser.parse(content);
+      log("Updating tasks view");
+      const content =
+        contentOverride ?? fs.readFileSync(this._boardFilePath, "utf8");
+      const board = BrainfileParser.parse(content);
 
       if (!board) {
-        log('Failed to parse board file');
+        log("Failed to parse board file");
         this._parseErrorCount++;
-        
+
         // If we have a last valid board, show it with a warning banner
         if (this._lastValidBoard && this._parseErrorCount <= 3) {
-          log('Showing last valid board with warning');
+          log("Showing last valid board with warning");
           // Send a warning message to the webview
           if (!this._isFirstRender) {
             this._view.webview.postMessage({
-              type: 'parseWarning',
-              message: 'Syntax error in bangbang.md - showing last valid state'
+              type: "parseWarning",
+              message: "Syntax error in brainfile.md - showing last valid state",
             });
           }
           // Don't update the view, keep showing the last valid board
           return;
         }
-        
+
         // If no valid board or too many consecutive errors, show error page
         this._view.webview.html = this.getErrorHtml(
-          'Failed to parse bangbang.md',
-          'Check for YAML syntax errors in the frontmatter. Common issues:\n• Missing colons after keys\n• Incorrect indentation\n• Unclosed quotes or brackets'
+          "Failed to parse brainfile.md",
+          "Check for YAML syntax errors in the frontmatter. Common issues:\n• Missing colons after keys\n• Incorrect indentation\n• Unclosed quotes or brackets"
         );
         return;
       }
@@ -522,11 +735,15 @@ columns:
       // Load archive from separate file if it exists
       this.loadArchive(board);
 
-      log('Board parsed successfully:', board.title, `(${board.columns.length} columns)`);
+      log(
+        "Board parsed successfully:",
+        board.title,
+        `(${board.columns.length} columns)`
+      );
 
       // Debug log for subtasks
-      board.columns.forEach(col => {
-        col.tasks.forEach(task => {
+      board.columns.forEach((col) => {
+        col.tasks.forEach((task) => {
           if (task.subtasks) {
             log(`Task ${task.id} has ${task.subtasks.length} subtasks`);
           }
@@ -535,42 +752,47 @@ columns:
 
       // On first load or forced refresh, set the full HTML
       if (this._isFirstRender || forceFullRefresh) {
-        log('Setting initial HTML');
+        log("Setting initial HTML");
         this._view.webview.html = this.getTasksHtml(board);
         this._isFirstRender = false;
       } else {
         // On subsequent updates, use postMessage to preserve state
-        log('Sending board update via postMessage');
+        log("Sending board update via postMessage");
         this._view.webview.postMessage({
-          type: 'boardUpdate',
-          board: board
+          type: "boardUpdate",
+          board: board,
         });
       }
     } catch (error) {
-      log('Error updating view:', error);
-      vscode.window.showErrorMessage('Failed to update BangBang board view');
+      log("Error updating view:", error);
+      vscode.window.showErrorMessage("Failed to update Brainfile board view");
     }
   }
 
-  private handleUpdateTask(columnId: string, taskId: string, newTitle: string, newDescription: string) {
+  private handleUpdateTask(
+    columnId: string,
+    taskId: string,
+    newTitle: string,
+    newDescription: string
+  ) {
     if (!this._boardFilePath) return;
 
     log(`Updating task ${taskId} in column ${columnId}`);
-    const content = fs.readFileSync(this._boardFilePath, 'utf8');
-    const board = BangBangParser.parse(content);
+    const content = fs.readFileSync(this._boardFilePath, "utf8");
+    const board = BrainfileParser.parse(content);
     if (!board) return;
 
     for (const col of board.columns) {
       if (col.id === columnId) {
-        const task = col.tasks.find(t => t.id === taskId);
+        const task = col.tasks.find((t) => t.id === taskId);
         if (task) {
           task.title = newTitle;
           task.description = newDescription;
-          const newContent = BangBangParser.serialize(board);
+          const newContent = BrainfileSerializer.serialize(board);
 
           // Use debounced write to prevent conflicts
           this.debouncedWrite(newContent, () => {
-            log('Task updated successfully');
+            log("Task updated successfully");
           });
 
           // Immediately update the view
@@ -585,18 +807,18 @@ columns:
     if (!this._boardFilePath) return;
 
     log(`Deleting task ${taskId} from column ${columnId}`);
-    const content = fs.readFileSync(this._boardFilePath, 'utf8');
-    const board = BangBangParser.parse(content);
+    const content = fs.readFileSync(this._boardFilePath, "utf8");
+    const board = BrainfileParser.parse(content);
     if (!board) return;
 
     for (const col of board.columns) {
       if (col.id === columnId) {
-        col.tasks = col.tasks.filter(t => t.id !== taskId);
-        const newContent = BangBangParser.serialize(board);
+        col.tasks = col.tasks.filter((t) => t.id !== taskId);
+        const newContent = BrainfileSerializer.serialize(board);
 
         // Write synchronously like archive does to ensure immediate UI update
-        fs.writeFileSync(this._boardFilePath, newContent, 'utf8');
-        log('Task deleted successfully');
+        fs.writeFileSync(this._boardFilePath, newContent, "utf8");
+        log("Task deleted successfully");
 
         // Update hash to prevent double update from file watcher
         this._lastContentHash = this.hashContent(newContent);
@@ -608,19 +830,26 @@ columns:
     }
   }
 
-  private handleMoveTask(taskId: string, fromColumnId: string, toColumnId: string, toIndex: number) {
+  private handleMoveTask(
+    taskId: string,
+    fromColumnId: string,
+    toColumnId: string,
+    toIndex: number
+  ) {
     if (!this._boardFilePath) return;
 
-    log(`Moving task ${taskId} from ${fromColumnId} to ${toColumnId} at index ${toIndex}`);
-    const content = fs.readFileSync(this._boardFilePath, 'utf8');
-    const board = BangBangParser.parse(content);
+    log(
+      `Moving task ${taskId} from ${fromColumnId} to ${toColumnId} at index ${toIndex}`
+    );
+    const content = fs.readFileSync(this._boardFilePath, "utf8");
+    const board = BrainfileParser.parse(content);
     if (!board) return;
 
     // Find source column and remove task
     let taskToMove = null;
     for (const col of board.columns) {
       if (col.id === fromColumnId) {
-        const taskIndex = col.tasks.findIndex(t => t.id === taskId);
+        const taskIndex = col.tasks.findIndex((t) => t.id === taskId);
         if (taskIndex !== -1) {
           taskToMove = col.tasks.splice(taskIndex, 1)[0];
           break;
@@ -638,13 +867,13 @@ columns:
       }
     }
 
-    const newContent = BangBangParser.serialize(board);
-    fs.writeFileSync(this._boardFilePath, newContent, 'utf8');
+    const newContent = BrainfileSerializer.serialize(board);
+    fs.writeFileSync(this._boardFilePath, newContent, "utf8");
 
     // Update hash to prevent double update
     this._lastContentHash = this.hashContent(newContent);
 
-    log('Task moved successfully');
+    log("Task moved successfully");
 
     // Immediately update the view
     this.updateView();
@@ -654,18 +883,18 @@ columns:
     if (!this._boardFilePath) return;
 
     log(`Updating board title to: ${newTitle}`);
-    const content = fs.readFileSync(this._boardFilePath, 'utf8');
-    const board = BangBangParser.parse(content);
+    const content = fs.readFileSync(this._boardFilePath, "utf8");
+    const board = BrainfileParser.parse(content);
     if (!board) return;
 
     board.title = newTitle;
-    const newContent = BangBangParser.serialize(board);
-    fs.writeFileSync(this._boardFilePath, newContent, 'utf8');
+    const newContent = BrainfileSerializer.serialize(board);
+    fs.writeFileSync(this._boardFilePath, newContent, "utf8");
 
     // Update hash to prevent double update
     this._lastContentHash = this.hashContent(newContent);
 
-    log('Board title updated successfully');
+    log("Board title updated successfully");
 
     // Immediately update the view
     this.updateView();
@@ -677,14 +906,11 @@ columns:
     try {
       log(`Opening task ${taskId} in editor`);
 
-      // Import BangBangParser at the top if not already imported
-      const { BangBangParser } = await import('./parser');
-
       // Read the file content
-      const content = fs.readFileSync(this._boardFilePath, 'utf8');
+      const content = fs.readFileSync(this._boardFilePath, "utf8");
 
       // Find the task location
-      const location = BangBangParser.findTaskLocation(content, taskId);
+      const location = BrainfileParser.findTaskLocation(content, taskId);
 
       if (!location) {
         vscode.window.showErrorMessage(`Could not find task ${taskId} in file`);
@@ -694,12 +920,15 @@ columns:
       // Check if the document is already open in a visible editor
       const uri = vscode.Uri.file(this._boardFilePath);
       let editor = vscode.window.visibleTextEditors.find(
-        editor => editor.document.uri.toString() === uri.toString()
+        (editor) => editor.document.uri.toString() === uri.toString()
       );
 
       if (editor) {
         // Document is already open, just focus it and move cursor
-        const position = new vscode.Position(location.line - 1, location.column);
+        const position = new vscode.Position(
+          location.line - 1,
+          location.column
+        );
         const range = new vscode.Range(position, position);
 
         editor.selection = new vscode.Selection(position, position);
@@ -708,18 +937,21 @@ columns:
         // Focus the existing editor
         await vscode.window.showTextDocument(editor.document, {
           viewColumn: editor.viewColumn,
-          preserveFocus: false
+          preserveFocus: false,
         });
       } else {
         // Document is not open, open it in a new editor
         const document = await vscode.workspace.openTextDocument(uri);
-        const position = new vscode.Position(location.line - 1, location.column);
+        const position = new vscode.Position(
+          location.line - 1,
+          location.column
+        );
         const range = new vscode.Range(position, position);
 
         editor = await vscode.window.showTextDocument(document, {
           selection: range,
           viewColumn: vscode.ViewColumn.Beside, // Open beside the webview
-          preserveFocus: false // Give focus to the editor
+          preserveFocus: false, // Give focus to the editor
         });
       }
 
@@ -730,23 +962,27 @@ columns:
 
       log(`Opened editor at line ${location.line} for task ${taskId}`);
     } catch (error) {
-      log('Error opening task in editor:', error);
-      vscode.window.showErrorMessage('Failed to open task in editor');
+      log("Error opening task in editor:", error);
+      vscode.window.showErrorMessage("Failed to open task in editor");
     }
   }
 
-  private async highlightTask(editor: vscode.TextEditor, taskId: string, content: string) {
+  private async highlightTask(
+    editor: vscode.TextEditor,
+    taskId: string,
+    content: string
+  ) {
     // Create a decoration type for highlighting
     const highlightDecoration = vscode.window.createTextEditorDecorationType({
-      backgroundColor: 'rgba(255, 235, 59, 0.3)', // Yellow highlight
-      border: '1px solid rgba(255, 235, 59, 0.5)',
-      borderRadius: '2px',
-      overviewRulerColor: 'rgba(255, 235, 59, 0.8)',
+      backgroundColor: "rgba(255, 235, 59, 0.3)", // Yellow highlight
+      border: "1px solid rgba(255, 235, 59, 0.5)",
+      borderRadius: "2px",
+      overviewRulerColor: "rgba(255, 235, 59, 0.8)",
       overviewRulerLane: vscode.OverviewRulerLane.Right,
     });
 
     // Find the task's full range (from task start to next task or end of tasks array)
-    const lines = content.split('\n');
+    const lines = content.split("\n");
     const ranges: vscode.Range[] = [];
 
     let taskStartLine = -1;
@@ -848,7 +1084,7 @@ columns:
       // Resolve relative paths from workspace root
       const workspaceFolders = vscode.workspace.workspaceFolders;
       if (!workspaceFolders) {
-        log('No workspace folder found');
+        log("No workspace folder found");
         return;
       }
 
@@ -867,25 +1103,25 @@ columns:
         editor.revealRange(new vscode.Range(position, position));
       }
 
-      log('File opened successfully');
+      log("File opened successfully");
     } catch (error) {
-      log('Error opening file:', error);
+      log("Error opening file:", error);
       vscode.window.showErrorMessage(`Failed to open file: ${filePath}`);
     }
   }
 
   private handleClearCache() {
     try {
-      log('Clearing cache and reloading window');
+      log("Clearing cache and reloading window");
 
       // Dispose all resources
       this.dispose();
 
       // Reload the window
-      vscode.commands.executeCommand('workbench.action.reloadWindow');
+      vscode.commands.executeCommand("workbench.action.reloadWindow");
     } catch (error) {
-      log('Error clearing cache:', error);
-      vscode.window.showErrorMessage('Failed to clear cache');
+      log("Error clearing cache:", error);
+      vscode.window.showErrorMessage("Failed to clear cache");
     }
   }
 
@@ -893,38 +1129,40 @@ columns:
     if (!this._boardFilePath) return;
 
     try {
-      log(`Saving stats config with columns: ${columns.join(', ')}`);
+      log(`Saving stats config with columns: ${columns.join(", ")}`);
 
-      const content = fs.readFileSync(this._boardFilePath, 'utf8');
-      const board = BangBangParser.parse(content);
+      const content = fs.readFileSync(this._boardFilePath, "utf8");
+      const board = BrainfileParser.parse(content);
       if (!board) return;
 
       // Update or create statsConfig
       if (columns.length > 0) {
         board.statsConfig = {
-          columns: columns.slice(0, 4) // Max 4 columns
+          columns: columns.slice(0, 4), // Max 4 columns
         };
       } else {
         // Remove statsConfig if no columns selected (use default)
         delete board.statsConfig;
       }
 
-      const newContent = BangBangParser.serialize(board);
-      fs.writeFileSync(this._boardFilePath, newContent, 'utf8');
+      const newContent = BrainfileSerializer.serialize(board);
+      fs.writeFileSync(this._boardFilePath, newContent, "utf8");
 
       // Update hash to prevent double update
       this._lastContentHash = this.hashContent(newContent);
 
-      log('Stats config saved successfully');
+      log("Stats config saved successfully");
 
       // Show success message
-      vscode.window.showInformationMessage('Stats configuration saved successfully');
+      vscode.window.showInformationMessage(
+        "Stats configuration saved successfully"
+      );
 
       // Immediately update the view
       this.updateView();
     } catch (error) {
-      log('Error saving stats config:', error);
-      vscode.window.showErrorMessage('Failed to save stats configuration');
+      log("Error saving stats config:", error);
+      vscode.window.showErrorMessage("Failed to save stats configuration");
     }
   }
 
@@ -938,7 +1176,7 @@ columns:
 
     // Determine archive filename based on main board filename
     const mainFilename = path.basename(this._boardFilePath);
-    const archiveFilename = mainFilename.replace(/\.md$/, '-archive.md');
+    const archiveFilename = mainFilename.replace(/\.md$/, "-archive.md");
     return path.join(rootPath, archiveFilename);
   }
 
@@ -947,15 +1185,15 @@ columns:
     if (!archivePath || !this._boardFilePath) return;
 
     if (!fs.existsSync(archivePath)) {
-      log('No archive file found at:', archivePath);
+      log("No archive file found at:", archivePath);
       board.archive = [];
       return;
     }
 
     try {
-      log('Loading archive from:', archivePath);
-      const archiveContent = fs.readFileSync(archivePath, 'utf8');
-      const archiveBoard = BangBangParser.parse(archiveContent);
+      log("Loading archive from:", archivePath);
+      const archiveContent = fs.readFileSync(archivePath, "utf8");
+      const archiveBoard = BrainfileParser.parse(archiveContent);
 
       if (archiveBoard && archiveBoard.archive) {
         board.archive = archiveBoard.archive;
@@ -964,7 +1202,7 @@ columns:
         board.archive = [];
       }
     } catch (error) {
-      log('Error loading archive:', error);
+      log("Error loading archive:", error);
       board.archive = [];
     }
   }
@@ -974,54 +1212,56 @@ columns:
 
     // Show quick input for task title
     const title = await vscode.window.showInputBox({
-      prompt: 'Task title',
-      placeHolder: 'Enter task title',
+      prompt: "Task title",
+      placeHolder: "Enter task title",
       validateInput: (value) => {
         if (!value || value.trim().length === 0) {
-          return 'Task title is required';
+          return "Task title is required";
         }
         return null;
-      }
+      },
     });
 
     if (!title) return;
 
     // Optional description
     const description = await vscode.window.showInputBox({
-      prompt: 'Task description (optional)',
-      placeHolder: 'Enter task description (supports markdown)'
+      prompt: "Task description (optional)",
+      placeHolder: "Enter task description (supports markdown)",
     });
 
     // Read current board
-    const content = fs.readFileSync(this._boardFilePath, 'utf8');
-    const board = BangBangParser.parse(content);
+    const content = fs.readFileSync(this._boardFilePath, "utf8");
+    const board = BrainfileParser.parse(content);
     if (!board) return;
 
     // Generate next task ID
-    const allTaskIds = board.columns.flatMap(col =>
-      col.tasks.map(t => parseInt(t.id.replace('task-', '')) || 0)
+    const allTaskIds = board.columns.flatMap((col) =>
+      col.tasks.map((t) => parseInt(t.id.replace("task-", "")) || 0)
     );
     const maxId = Math.max(0, ...allTaskIds);
     const newTaskId = `task-${maxId + 1}`;
 
     // Add task to the specified column
-    const column = board.columns.find(col => col.id === columnId);
+    const column = board.columns.find((col) => col.id === columnId);
     if (column) {
       column.tasks.push({
         id: newTaskId,
         title: title.trim(),
-        description: description?.trim() || ''
+        description: description?.trim() || "",
       });
 
       // Save the updated board
-      const newContent = BangBangParser.serialize(board);
-      fs.writeFileSync(this._boardFilePath, newContent, 'utf8');
+      const newContent = BrainfileSerializer.serialize(board);
+      fs.writeFileSync(this._boardFilePath, newContent, "utf8");
 
       // Update hash to prevent double update
       this._lastContentHash = this.hashContent(newContent);
 
       log(`Added task ${newTaskId} to column ${columnId}`);
-      vscode.window.showInformationMessage(`Added task "${title}" to ${column.title}`);
+      vscode.window.showInformationMessage(
+        `Added task "${title}" to ${column.title}`
+      );
 
       // Update the view
       this.updateView();
@@ -1034,27 +1274,31 @@ columns:
     log(`Toggling subtask ${subtaskId} for task ${taskId}`);
 
     // Read current board
-    const content = fs.readFileSync(this._boardFilePath, 'utf8');
-    const board = BangBangParser.parse(content);
+    const content = fs.readFileSync(this._boardFilePath, "utf8");
+    const board = BrainfileParser.parse(content);
     if (!board) return;
 
     // Find the task and subtask
     for (const col of board.columns) {
-      const task = col.tasks.find(t => t.id === taskId);
+      const task = col.tasks.find((t) => t.id === taskId);
       if (task && task.subtasks) {
-        const subtask = task.subtasks.find(st => st.id === subtaskId);
+        const subtask = task.subtasks.find((st) => st.id === subtaskId);
         if (subtask) {
           // Toggle the completed state
           subtask.completed = !subtask.completed;
 
           // Save the updated board
-          const newContent = BangBangParser.serialize(board);
-          fs.writeFileSync(this._boardFilePath, newContent, 'utf8');
+          const newContent = BrainfileSerializer.serialize(board);
+          fs.writeFileSync(this._boardFilePath, newContent, "utf8");
 
           // Update hash to prevent double update
           this._lastContentHash = this.hashContent(newContent);
 
-          log(`Subtask ${subtaskId} toggled to ${subtask.completed ? 'completed' : 'incomplete'}`);
+          log(
+            `Subtask ${subtaskId} toggled to ${
+              subtask.completed ? "completed" : "incomplete"
+            }`
+          );
 
           // Update the view
           this.updateView();
@@ -1064,21 +1308,201 @@ columns:
     }
   }
 
+  private async handleAddRule(
+    ruleType: "always" | "never" | "prefer" | "context"
+  ) {
+    if (!this._boardFilePath) return;
+
+    // Show quick input for rule text
+    const ruleText = await vscode.window.showInputBox({
+      prompt: `Add ${ruleType.toUpperCase()} rule`,
+      placeHolder: `Enter the rule text for ${ruleType}`,
+      validateInput: (value) => {
+        if (!value || value.trim().length === 0) {
+          return "Rule text is required";
+        }
+        return null;
+      },
+    });
+
+    if (!ruleText) return;
+
+    // Read current board
+    const content = fs.readFileSync(this._boardFilePath, "utf8");
+    const board = BrainfileParser.parse(content);
+    if (!board) return;
+
+    // Initialize rules if not present
+    if (!board.rules) {
+      board.rules = {
+        always: [],
+        never: [],
+        prefer: [],
+        context: [],
+      };
+    }
+
+    // Ensure the rule type array exists
+    if (!board.rules[ruleType]) {
+      board.rules[ruleType] = [];
+    }
+
+    // Generate next rule ID for this type
+    const existingIds = board.rules[ruleType].map((r) => r.id);
+    const maxId = Math.max(0, ...existingIds);
+    const newRuleId = maxId + 1;
+
+    // Add the new rule
+    board.rules[ruleType].push({
+      id: newRuleId,
+      rule: ruleText.trim(),
+    });
+
+    // Save the updated board
+    const newContent = BrainfileSerializer.serialize(board);
+    fs.writeFileSync(this._boardFilePath, newContent, "utf8");
+
+    // Update hash to prevent double update
+    this._lastContentHash = this.hashContent(newContent);
+
+    log(`Added new ${ruleType} rule with id ${newRuleId}`);
+
+    // Update the view
+    this.updateView();
+  }
+
+  private async handleEditRule(
+    ruleId: string,
+    ruleType: "always" | "never" | "prefer" | "context"
+  ) {
+    if (!this._boardFilePath) return;
+
+    try {
+      log(`Opening rule ${ruleId} in ${ruleType} section in editor`);
+
+      // Read the file content
+      const content = fs.readFileSync(this._boardFilePath, "utf8");
+
+      // Convert ruleId to number and find the rule location
+      const ruleIdNum = parseInt(ruleId);
+      const location = BrainfileParser.findRuleLocation(
+        content,
+        ruleIdNum,
+        ruleType
+      );
+
+      if (!location) {
+        vscode.window.showErrorMessage(
+          `Could not find rule ${ruleId} in ${ruleType} section`
+        );
+        return;
+      }
+
+      // Check if the document is already open in a visible editor
+      const uri = vscode.Uri.file(this._boardFilePath);
+      let editor = vscode.window.visibleTextEditors.find(
+        (editor) => editor.document.uri.toString() === uri.toString()
+      );
+
+      if (editor) {
+        // Document is already open, just focus it and move cursor
+        const position = new vscode.Position(
+          location.line - 1,
+          location.column
+        );
+        const range = new vscode.Range(position, position);
+
+        editor.selection = new vscode.Selection(position, position);
+        editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+
+        // Focus the existing editor
+        await vscode.window.showTextDocument(editor.document, {
+          viewColumn: editor.viewColumn,
+          preserveFocus: false,
+        });
+      } else {
+        // Document is not open, open it in a new editor
+        const document = await vscode.workspace.openTextDocument(uri);
+        const position = new vscode.Position(
+          location.line - 1,
+          location.column
+        );
+        const range = new vscode.Range(position, position);
+
+        editor = await vscode.window.showTextDocument(document, {
+          selection: range,
+          viewColumn: vscode.ViewColumn.Beside, // Open beside the webview
+          preserveFocus: false, // Give focus to the editor
+        });
+      }
+
+      log(`Opened editor at line ${location.line} for rule ${ruleId}`);
+    } catch (error) {
+      log("Error opening rule in editor:", error);
+      vscode.window.showErrorMessage("Failed to open rule in editor");
+    }
+  }
+
+  private async handleDeleteRule(
+    ruleId: string,
+    ruleType: "always" | "never" | "prefer" | "context"
+  ) {
+    if (!this._boardFilePath) return;
+
+    // Show confirmation dialog
+    const confirm = await vscode.window.showWarningMessage(
+      `Delete ${ruleType} rule ${ruleId}?`,
+      "Delete",
+      "Cancel"
+    );
+
+    if (confirm !== "Delete") return;
+
+    // Read current board
+    const content = fs.readFileSync(this._boardFilePath, "utf8");
+    const board = BrainfileParser.parse(content);
+    if (!board || !board.rules) return;
+
+    // Check if the rule type exists
+    if (!board.rules[ruleType]) return;
+
+    // Find and remove the rule (convert ruleId to number for comparison)
+    const ruleIdNum = parseInt(ruleId);
+    const ruleIndex = board.rules[ruleType].findIndex(
+      (r) => r.id === ruleIdNum
+    );
+    if (ruleIndex !== -1) {
+      board.rules[ruleType].splice(ruleIndex, 1);
+
+      // Save the updated board
+      const newContent = BrainfileSerializer.serialize(board);
+      fs.writeFileSync(this._boardFilePath, newContent, "utf8");
+
+      // Update hash to prevent double update
+      this._lastContentHash = this.hashContent(newContent);
+
+      log(`Deleted ${ruleType} rule ${ruleId}`);
+
+      // Update the view
+      this.updateView();
+    }
+  }
+
   private handleArchiveTask(columnId: string, taskId: string) {
     if (!this._boardFilePath) return;
 
     log(`Archiving task ${taskId} from column ${columnId}`);
 
     // Read main board
-    const content = fs.readFileSync(this._boardFilePath, 'utf8');
-    const board = BangBangParser.parse(content);
+    const content = fs.readFileSync(this._boardFilePath, "utf8");
+    const board = BrainfileParser.parse(content);
     if (!board) return;
 
     // Find and remove the task from the column
     let taskToArchive = null;
     for (const col of board.columns) {
       if (col.id === columnId) {
-        const taskIndex = col.tasks.findIndex(t => t.id === taskId);
+        const taskIndex = col.tasks.findIndex((t) => t.id === taskId);
         if (taskIndex !== -1) {
           taskToArchive = col.tasks.splice(taskIndex, 1)[0];
           break;
@@ -1087,13 +1511,13 @@ columns:
     }
 
     if (!taskToArchive) {
-      log('Task not found');
+      log("Task not found");
       return;
     }
 
     // Save updated main board (without the archived task)
-    const newContent = BangBangParser.serialize(board);
-    fs.writeFileSync(this._boardFilePath, newContent, 'utf8');
+    const newContent = BrainfileSerializer.serialize(board);
+    fs.writeFileSync(this._boardFilePath, newContent, "utf8");
 
     // Update hash to prevent double update
     this._lastContentHash = this.hashContent(newContent);
@@ -1104,14 +1528,14 @@ columns:
 
     const rootPath = workspaceFolders[0].uri.fsPath;
     const mainFilename = path.basename(this._boardFilePath);
-    const archiveFilename = mainFilename.replace(/\.md$/, '-archive.md');
+    const archiveFilename = mainFilename.replace(/\.md$/, "-archive.md");
     const archivePath = path.join(rootPath, archiveFilename);
 
     // Read or create archive file
     let archiveBoard: Board;
     if (fs.existsSync(archivePath)) {
-      const archiveContent = fs.readFileSync(archivePath, 'utf8');
-      const parsed = BangBangParser.parse(archiveContent);
+      const archiveContent = fs.readFileSync(archivePath, "utf8");
+      const parsed = BrainfileParser.parse(archiveContent);
       if (parsed) {
         archiveBoard = parsed;
       } else {
@@ -1128,11 +1552,13 @@ columns:
     archiveBoard.archive.unshift(taskToArchive); // Add to beginning
 
     // Save archive file
-    const archiveContent = BangBangParser.serialize(archiveBoard);
-    fs.writeFileSync(archivePath, archiveContent, 'utf8');
+    const archiveContent = BrainfileSerializer.serialize(archiveBoard);
+    fs.writeFileSync(archivePath, archiveContent, "utf8");
 
-    log('Task archived successfully');
-    vscode.window.showInformationMessage(`Task "${taskToArchive.title}" archived`);
+    log("Task archived successfully");
+    vscode.window.showInformationMessage(
+      `Task "${taskToArchive.title}" archived`
+    );
 
     // Force a full refresh with the updated archive
     // Load the archive into the current board before updating
@@ -1141,23 +1567,24 @@ columns:
     // Send update via postMessage for reactive update
     if (this._view) {
       this._view.webview.postMessage({
-        type: 'boardUpdate',
-        board: board
+        type: "boardUpdate",
+        board: board,
       });
     }
   }
 
   private createEmptyArchiveBoard(): Board {
     return {
-      title: 'Archive',
+      title: "Archive",
       columns: [],
-      archive: []
+      archive: [],
     };
   }
 
   private getNonce(): string {
-    let text = '';
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let text = "";
+    const possible =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     for (let i = 0; i < 32; i++) {
       text += possible.charAt(Math.floor(Math.random() * possible.length));
     }
@@ -1166,13 +1593,13 @@ columns:
 
   private getSubtaskProgress(subtasks: Subtask[]): number {
     if (!subtasks || subtasks.length === 0) return 0;
-    const completed = subtasks.filter(st => st.completed).length;
+    const completed = subtasks.filter((st) => st.completed).length;
     return Math.round((completed / subtasks.length) * 100);
   }
 
   private getCompletedSubtaskCount(subtasks: Subtask[]): number {
     if (!subtasks) return 0;
-    return subtasks.filter(st => st.completed).length;
+    return subtasks.filter((st) => st.completed).length;
   }
 
   private getStatsHtml(board: Board, totalTasks: number): string {
@@ -1180,21 +1607,23 @@ columns:
     if (board.statsConfig?.columns && board.statsConfig.columns.length > 0) {
       // Use configured columns (max 4)
       const statColumns = board.statsConfig.columns.slice(0, 4);
-      return statColumns.map(columnId => {
-        const column = board.columns.find(col => col.id === columnId);
-        if (column) {
-          return `
+      return statColumns
+        .map((columnId) => {
+          const column = board.columns.find((col) => col.id === columnId);
+          if (column) {
+            return `
             <div class="stat">
               <div class="stat-value">${column.tasks.length}</div>
               <div class="stat-label">${this.escapeHtml(column.title)}</div>
             </div>
           `;
-        }
-        return '';
-      }).join('');
+          }
+          return "";
+        })
+        .join("");
     } else {
       // Default: Total and Done
-      const doneColumn = board.columns.find(col => col.id === 'done');
+      const doneColumn = board.columns.find((col) => col.id === "done");
       const doneTasks = doneColumn ? doneColumn.tasks.length : 0;
       return `
         <div class="stat">
@@ -1211,20 +1640,24 @@ columns:
 
   private getTasksHtml(board: Board): string {
     // Calculate progress metrics
-    const totalTasks = board.columns.reduce((sum, col) => sum + col.tasks.length, 0);
-    const doneColumn = board.columns.find(col => col.id === 'done');
+    const totalTasks = board.columns.reduce(
+      (sum, col) => sum + col.tasks.length,
+      0
+    );
+    const doneColumn = board.columns.find((col) => col.id === "done");
     const doneTasks = doneColumn ? doneColumn.tasks.length : 0;
-    const progressPercent = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+    const progressPercent =
+      totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
 
     // Extract unique filter values from all tasks
-    const allTasks = board.columns.flatMap(col => col.tasks);
+    const allTasks = board.columns.flatMap((col) => col.tasks);
     const uniqueTags = new Set<string>();
     const uniqueAssignees = new Set<string>();
     const uniquePriorities = new Set<string>();
 
-    allTasks.forEach(task => {
+    allTasks.forEach((task) => {
       if (task.tags) {
-        task.tags.forEach(tag => uniqueTags.add(tag));
+        task.tags.forEach((tag) => uniqueTags.add(tag));
       }
       if (task.assignee) {
         uniqueAssignees.add(task.assignee);
@@ -1237,7 +1670,7 @@ columns:
     // Sort the unique values
     const sortedTags = Array.from(uniqueTags).sort();
     const sortedAssignees = Array.from(uniqueAssignees).sort();
-    const priorityOrder = ['critical', 'high', 'medium', 'low'];
+    const priorityOrder = ["critical", "high", "medium", "low"];
     const sortedPriorities = Array.from(uniquePriorities).sort((a, b) => {
       return priorityOrder.indexOf(a) - priorityOrder.indexOf(b);
     });
@@ -1250,8 +1683,10 @@ columns:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${this._view?.webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
-  <title>BangBang Tasks</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${
+    this._view?.webview.cspSource
+  } 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <title>Brainfile Tasks</title>
   <style>
     * {
       margin: 0;
@@ -1289,10 +1724,37 @@ columns:
       padding: 16px;
       border-bottom: 1px solid var(--vscode-panel-border);
       background: var(--vscode-sideBarSectionHeader-background);
+      display: flex;
+      gap: 8px;
+      align-items: center;
     }
 
     .search-container {
       position: relative;
+      flex: 1;
+    }
+
+    .template-button {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border: none;
+      border-radius: 2px;
+      padding: 6px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+
+    .template-button:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
+
+    .template-icon {
+      font-size: 14px;
     }
 
     .search-input {
@@ -2076,6 +2538,75 @@ columns:
       opacity: 0.9;
       line-height: 1.5;
       letter-spacing: -0.01em;
+      flex: 1;
+    }
+
+    .rules-category-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding: 4px;
+      border-radius: 4px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s;
+    }
+
+    .rules-category-header:hover {
+      background: var(--vscode-list-hoverBackground);
+    }
+
+    .add-rule-btn {
+      background: transparent;
+      color: var(--vscode-editor-foreground);
+      border: none;
+      border-radius: 3px;
+      padding: 2px 4px;
+      cursor: pointer;
+      font-size: 14px;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+
+    .rules-category-header:hover .add-rule-btn {
+      opacity: 0.6;
+    }
+
+    .add-rule-btn:hover {
+      opacity: 1 !important;
+      background: var(--vscode-toolbar-hoverBackground);
+    }
+
+    .rule-actions {
+      display: flex;
+      gap: 4px;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+
+    .rule-item-full:hover .rule-actions {
+      opacity: 1;
+    }
+
+    .rule-action {
+      background: transparent;
+      border: none;
+      color: var(--vscode-descriptionForeground);
+      cursor: pointer;
+      padding: 2px 4px;
+      font-size: 14px;
+      border-radius: 3px;
+      transition: all 0.15s;
+    }
+
+    .rule-action:hover {
+      background: var(--vscode-list-hoverBackground);
+      color: var(--vscode-editor-foreground);
+    }
+
+    .rule-action.delete:hover {
+      color: var(--vscode-errorForeground);
     }
 
     .settings-view {
@@ -2179,7 +2710,9 @@ columns:
 <body>
   <div class="header-top">
     <div class="board-title-wrapper">
-      <div class="board-title" id="boardTitle">${this.escapeHtml(board.title)}</div>
+      <div class="board-title" id="boardTitle">${this.escapeHtml(
+        board.title
+      )}</div>
       <button class="title-edit-btn" id="titleEditBtn" title="Edit title">✎</button>
     </div>
   </div>
@@ -2232,7 +2765,9 @@ columns:
       </div>
     </div>
 
-    ${board.columns.map(col => `
+    ${board.columns
+      .map(
+        (col) => `
       <div class="column-section" data-column-id="${col.id}">
         <div class="column-header">
           <div class="column-header-title">
@@ -2240,146 +2775,300 @@ columns:
             <span>${this.escapeHtml(col.title)}</span>
           </div>
           <div class="column-header-right">
-            <button class="add-task-btn" data-column-id="${col.id}" title="Add task to ${this.escapeHtml(col.title)}">+</button>
+            <button class="add-task-btn" data-column-id="${
+              col.id
+            }" title="Add task to ${this.escapeHtml(col.title)}">+</button>
             <span class="task-count">${col.tasks.length}</span>
           </div>
         </div>
-        ${col.tasks.length === 0
-          ? '<div class="empty-state">No tasks</div>'
-          : col.tasks.map((task, index) => `
+        ${
+          col.tasks.length === 0
+            ? '<div class="empty-state">No tasks</div>'
+            : col.tasks
+                .map(
+                  (task, index) => `
             <div class="task"
                  data-task-id="${task.id}"
                  data-column-id="${col.id}"
                  data-task-index="${index}"
-                 data-priority="${task.priority || ''}"
-                 data-assignee="${task.assignee || ''}"
-                 data-tags="${task.tags ? this.escapeHtml(JSON.stringify(task.tags)) : '[]'}"
+                 data-priority="${task.priority || ""}"
+                 data-assignee="${task.assignee || ""}"
+                 data-tags="${
+                   task.tags ? this.escapeHtml(JSON.stringify(task.tags)) : "[]"
+                 }"
                  draggable="true">
               <div class="task-header">
                 <span class="drag-handle">⋮⋮</span>
                 <div class="task-title">${this.escapeHtml(task.title)}</div>
                 <div class="task-actions">
                   <button class="task-action edit" data-action="edit" title="Edit">✎</button>
-                  ${col.id === 'done' ? '<button class="task-action archive" data-action="archive" title="Archive">⬇</button>' : ''}
+                  ${
+                    col.id === "done"
+                      ? '<button class="task-action archive" data-action="archive" title="Archive">⬇</button>'
+                      : ""
+                  }
                   <button class="task-action delete" data-action="delete" title="Delete">×</button>
                 </div>
               </div>
-              <div class="task-description">${this.renderMarkdown(task.description || '')}</div>
-              ${(task.priority || task.assignee || (task.tags && task.tags.length > 0)) ? `
+              <div class="task-description">${this.renderMarkdown(
+                task.description || ""
+              )}</div>
+              ${
+                task.priority ||
+                task.assignee ||
+                (task.tags && task.tags.length > 0)
+                  ? `
                 <div class="task-metadata">
-                  ${task.priority ? `<span class="task-priority priority-${task.priority}">${task.priority}</span>` : ''}
-                  ${task.assignee ? `<span class="task-assignee">@${this.escapeHtml(task.assignee)}</span>` : ''}
-                  ${task.tags && task.tags.length > 0 ? task.tags.map(tag =>
-                    `<span class="task-tag">#${this.escapeHtml(tag)}</span>`
-                  ).join('') : ''}
+                  ${
+                    task.priority
+                      ? `<span class="task-priority priority-${task.priority}">${task.priority}</span>`
+                      : ""
+                  }
+                  ${
+                    task.assignee
+                      ? `<span class="task-assignee">@${this.escapeHtml(
+                          task.assignee
+                        )}</span>`
+                      : ""
+                  }
+                  ${
+                    task.tags && task.tags.length > 0
+                      ? task.tags
+                          .map(
+                            (tag) =>
+                              `<span class="task-tag">#${this.escapeHtml(
+                                tag
+                              )}</span>`
+                          )
+                          .join("")
+                      : ""
+                  }
                 </div>
-              ` : ''}
-              ${task.subtasks && task.subtasks.length > 0 ? `
+              `
+                  : ""
+              }
+              ${
+                task.subtasks && task.subtasks.length > 0
+                  ? `
                 <div class="subtasks-container">
                   <div class="subtask-progress">
                     <div class="subtask-progress-bar">
-                      <div class="subtask-progress-fill" style="width: ${this.getSubtaskProgress(task.subtasks)}%"></div>
+                      <div class="subtask-progress-fill" style="width: ${this.getSubtaskProgress(
+                        task.subtasks
+                      )}%"></div>
                     </div>
-                    <span class="subtask-count">${this.getCompletedSubtaskCount(task.subtasks)}/${task.subtasks.length}</span>
+                    <span class="subtask-count">${this.getCompletedSubtaskCount(
+                      task.subtasks
+                    )}/${task.subtasks.length}</span>
                   </div>
                   <ul class="subtask-list">
-                    ${task.subtasks.map(subtask => `
-                      <li class="subtask-item ${subtask.completed ? 'completed' : ''}" data-task-id="${task.id}" data-subtask-id="${subtask.id}">
+                    ${task.subtasks
+                      .map(
+                        (subtask) => `
+                      <li class="subtask-item ${
+                        subtask.completed ? "completed" : ""
+                      }" data-task-id="${task.id}" data-subtask-id="${
+                          subtask.id
+                        }">
                         <div class="subtask-checkbox"></div>
-                        <span class="subtask-title">${this.escapeHtml(subtask.title)}</span>
+                        <span class="subtask-title">${this.escapeHtml(
+                          subtask.title
+                        )}</span>
                       </li>
-                    `).join('')}
+                    `
+                      )
+                      .join("")}
                   </ul>
                 </div>
-              ` : ''}
-              ${task.relatedFiles && task.relatedFiles.length > 0 ? `
+              `
+                  : ""
+              }
+              ${
+                task.relatedFiles && task.relatedFiles.length > 0
+                  ? `
                 <div class="task-related-files">
-                  ${task.relatedFiles.map(file => `
-                    <div class="related-file" data-file="${this.escapeHtml(file)}">📄 ${this.escapeHtml(file)}</div>
-                  `).join('')}
+                  ${task.relatedFiles
+                    .map(
+                      (file) => `
+                    <div class="related-file" data-file="${this.escapeHtml(
+                      file
+                    )}">📄 ${this.escapeHtml(file)}</div>
+                  `
+                    )
+                    .join("")}
                 </div>
-              ` : ''}
+              `
+                  : ""
+              }
             </div>
-          `).join('')
+          `
+                )
+                .join("")
         }
       </div>
-    `).join('')}
+    `
+      )
+      .join("")}
   </div>
 
   <div class="tab-content" id="rulesTab">
-    ${board.rules ? `
+    ${
+      board.rules
+        ? `
       <div class="rules-view">
-        ${board.rules.always && board.rules.always.length > 0 ? `
-          <div class="rules-category">
+        <div class="rules-category">
+          <div class="rules-category-header">
             <div class="rules-category-title">ALWAYS</div>
-            ${board.rules.always.map(rule => `
-              <div class="rule-item-full">
-                <div class="rule-number">${rule.id}</div>
-                <div class="rule-text">${this.escapeHtml(rule.rule)}</div>
-              </div>
-            `).join('')}
+            <button class="add-rule-btn" data-rule-type="always" title="Add always rule">+</button>
           </div>
-        ` : ''}
+          ${
+            board.rules.always && board.rules.always.length > 0
+              ? board.rules.always
+                  .map(
+                    (rule) => `
+            <div class="rule-item-full" data-rule-id="${
+              rule.id
+            }" data-rule-type="always">
+              <div class="rule-number">${rule.id}</div>
+              <div class="rule-text">${this.escapeHtml(rule.rule)}</div>
+              <div class="rule-actions">
+                <button class="rule-action edit" data-action="edit-rule" title="Edit">✎</button>
+                <button class="rule-action delete" data-action="delete-rule" title="Delete">×</button>
+              </div>
+            </div>
+          `
+                  )
+                  .join("")
+              : '<div class="empty-state">No always rules</div>'
+          }
+        </div>
 
-        ${board.rules.never && board.rules.never.length > 0 ? `
-          <div class="rules-category">
+        <div class="rules-category">
+          <div class="rules-category-header">
             <div class="rules-category-title">NEVER</div>
-            ${board.rules.never.map(rule => `
-              <div class="rule-item-full">
-                <div class="rule-number">${rule.id}</div>
-                <div class="rule-text">${this.escapeHtml(rule.rule)}</div>
-              </div>
-            `).join('')}
+            <button class="add-rule-btn" data-rule-type="never" title="Add never rule">+</button>
           </div>
-        ` : ''}
+          ${
+            board.rules.never && board.rules.never.length > 0
+              ? board.rules.never
+                  .map(
+                    (rule) => `
+            <div class="rule-item-full" data-rule-id="${
+              rule.id
+            }" data-rule-type="never">
+              <div class="rule-number">${rule.id}</div>
+              <div class="rule-text">${this.escapeHtml(rule.rule)}</div>
+              <div class="rule-actions">
+                <button class="rule-action edit" data-action="edit-rule" title="Edit">✎</button>
+                <button class="rule-action delete" data-action="delete-rule" title="Delete">×</button>
+              </div>
+            </div>
+          `
+                  )
+                  .join("")
+              : '<div class="empty-state">No never rules</div>'
+          }
+        </div>
 
-        ${board.rules.prefer && board.rules.prefer.length > 0 ? `
-          <div class="rules-category">
+        <div class="rules-category">
+          <div class="rules-category-header">
             <div class="rules-category-title">PREFER</div>
-            ${board.rules.prefer.map(rule => `
-              <div class="rule-item-full">
-                <div class="rule-number">${rule.id}</div>
-                <div class="rule-text">${this.escapeHtml(rule.rule)}</div>
-              </div>
-            `).join('')}
+            <button class="add-rule-btn" data-rule-type="prefer" title="Add prefer rule">+</button>
           </div>
-        ` : ''}
+          ${
+            board.rules.prefer && board.rules.prefer.length > 0
+              ? board.rules.prefer
+                  .map(
+                    (rule) => `
+            <div class="rule-item-full" data-rule-id="${
+              rule.id
+            }" data-rule-type="prefer">
+              <div class="rule-number">${rule.id}</div>
+              <div class="rule-text">${this.escapeHtml(rule.rule)}</div>
+              <div class="rule-actions">
+                <button class="rule-action edit" data-action="edit-rule" title="Edit">✎</button>
+                <button class="rule-action delete" data-action="delete-rule" title="Delete">×</button>
+              </div>
+            </div>
+          `
+                  )
+                  .join("")
+              : '<div class="empty-state">No prefer rules</div>'
+          }
+        </div>
 
-        ${board.rules.context && board.rules.context.length > 0 ? `
-          <div class="rules-category">
+        <div class="rules-category">
+          <div class="rules-category-header">
             <div class="rules-category-title">CONTEXT</div>
-            ${board.rules.context.map(rule => `
-              <div class="rule-item-full">
-                <div class="rule-number">${rule.id}</div>
-                <div class="rule-text">${this.escapeHtml(rule.rule)}</div>
-              </div>
-            `).join('')}
+            <button class="add-rule-btn" data-rule-type="context" title="Add context rule">+</button>
           </div>
-        ` : ''}
+          ${
+            board.rules.context && board.rules.context.length > 0
+              ? board.rules.context
+                  .map(
+                    (rule) => `
+            <div class="rule-item-full" data-rule-id="${
+              rule.id
+            }" data-rule-type="context">
+              <div class="rule-number">${rule.id}</div>
+              <div class="rule-text">${this.escapeHtml(rule.rule)}</div>
+              <div class="rule-actions">
+                <button class="rule-action edit" data-action="edit-rule" title="Edit">✎</button>
+                <button class="rule-action delete" data-action="delete-rule" title="Delete">×</button>
+              </div>
+            </div>
+          `
+                  )
+                  .join("")
+              : '<div class="empty-state">No context rules</div>'
+          }
+        </div>
       </div>
-    ` : '<div class="empty-state">No rules defined</div>'}
+    `
+        : '<div class="empty-state">No rules defined</div>'
+    }
   </div>
 
   <div class="tab-content" id="archiveTab">
-    ${board.archive && board.archive.length > 0 ? `
+    ${
+      board.archive && board.archive.length > 0
+        ? `
       <div class="archive-view">
-        ${board.archive.map(task => `
+        ${board.archive
+          .map(
+            (task) => `
           <div class="task archived-task" data-task-id="${task.id}">
             <div class="task-header">
               <div class="task-title">${this.escapeHtml(task.title)}</div>
             </div>
-            <div class="task-description">${this.renderMarkdown(task.description)}</div>
-            ${task.relatedFiles && task.relatedFiles.length > 0 ? `
+            <div class="task-description">${this.renderMarkdown(
+              task.description
+            )}</div>
+            ${
+              task.relatedFiles && task.relatedFiles.length > 0
+                ? `
               <div class="task-related-files">
-                ${task.relatedFiles.map(file => `
-                  <div class="related-file" data-file="${this.escapeHtml(file)}">📄 ${this.escapeHtml(file)}</div>
-                `).join('')}
+                ${task.relatedFiles
+                  .map(
+                    (file) => `
+                  <div class="related-file" data-file="${this.escapeHtml(
+                    file
+                  )}">📄 ${this.escapeHtml(file)}</div>
+                `
+                  )
+                  .join("")}
               </div>
-            ` : ''}
+            `
+                : ""
+            }
           </div>
-        `).join('')}
+        `
+          )
+          .join("")}
       </div>
-    ` : '<div class="empty-state">No archived tasks</div>'}
+    `
+        : '<div class="empty-state">No archived tasks</div>'
+    }
   </div>
 
   <div class="tab-content" id="settingsTab">
@@ -2388,8 +3077,10 @@ columns:
         <div class="settings-section-title">Board Configuration</div>
         <div class="settings-item">
           <label class="settings-label">Board File Location</label>
-          <input type="text" class="settings-input" value="${this._boardFilePath || 'No file loaded'}" readonly>
-          <div class="settings-description">The current bangbang.md file being displayed</div>
+          <input type="text" class="settings-input" value="${
+            this._boardFilePath || "No file loaded"
+          }" readonly>
+          <div class="settings-description">The current brainfile.md file being displayed</div>
         </div>
       </div>
 
@@ -2398,18 +3089,21 @@ columns:
         <div class="settings-item">
           <label class="settings-label">Select columns to display as stat cards (max 4)</label>
           <div class="stats-config-options">
-            ${board.columns.map(col => {
-              const isChecked = board.statsConfig?.columns?.includes(col.id) || false;
-              return `
+            ${board.columns
+              .map((col) => {
+                const isChecked =
+                  board.statsConfig?.columns?.includes(col.id) || false;
+                return `
                 <label class="checkbox-label">
                   <input type="checkbox"
                          class="stat-column-checkbox"
                          data-column-id="${col.id}"
-                         ${isChecked ? 'checked' : ''}>
+                         ${isChecked ? "checked" : ""}>
                   <span>${this.escapeHtml(col.title)}</span>
                 </label>
               `;
-            }).join('')}
+              })
+              .join("")}
           </div>
           <div class="settings-description">
             Select which columns to display as stat cards. Leave all unchecked to use default (Total and Done).
@@ -2432,8 +3126,14 @@ columns:
         <div class="settings-section-title">About</div>
         <div class="settings-item">
           <div class="settings-description">
-            BangBang is a protocol-first AI task management system.<br>
-            Edit your bangbang.md file directly to manage tasks and rules.
+            <strong>Brainfile v${packageJson.version}</strong><br><br>
+            A protocol-first AI task management system.<br>
+            Edit your brainfile.md file directly to manage tasks and rules.<br><br>
+            <a href="${
+              packageJson.repository.url
+            }" style="color: var(--vscode-textLink-foreground); text-decoration: none;">
+              📦 View on GitHub
+            </a>
           </div>
         </div>
       </div>
@@ -2512,6 +3212,16 @@ columns:
         searchTerm = '';
         searchClear.style.display = 'none';
         applySearch();
+      });
+    }
+
+    // Template button handler
+    const templateBtn = document.getElementById('createFromTemplate');
+    if (templateBtn) {
+      templateBtn.addEventListener('click', () => {
+        vscode.postMessage({
+          type: 'createFromTemplate'
+        });
       });
     }
 
@@ -2685,6 +3395,50 @@ columns:
         vscode.postMessage({
           type: 'addTaskToColumn',
           columnId: columnId
+        });
+      });
+    });
+
+    // Add rule buttons
+    document.querySelectorAll('.add-rule-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const ruleType = btn.dataset.ruleType;
+        vscode.postMessage({
+          type: 'addRule',
+          ruleType: ruleType
+        });
+      });
+    });
+
+    // Edit rule actions - opens rule in editor
+    document.querySelectorAll('[data-action="edit-rule"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const ruleEl = e.target.closest('.rule-item-full');
+        const ruleId = ruleEl.dataset.ruleId;
+        const ruleType = ruleEl.dataset.ruleType;
+
+        vscode.postMessage({
+          type: 'editRule',
+          ruleId: ruleId,
+          ruleType: ruleType
+        });
+      });
+    });
+
+    // Delete rule actions
+    document.querySelectorAll('[data-action="delete-rule"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const ruleEl = e.target.closest('.rule-item-full');
+        const ruleId = ruleEl.dataset.ruleId;
+        const ruleType = ruleEl.dataset.ruleType;
+
+        vscode.postMessage({
+          type: 'deleteRule',
+          ruleId: ruleId,
+          ruleType: ruleType
         });
       });
     });
@@ -2903,6 +3657,9 @@ columns:
                    autocomplete="off">
             <button id="searchClear" class="search-clear" style="display: \${currentSearchTerm ? 'block' : 'none'};">×</button>
           </div>
+          <button id="createFromTemplate" class="template-button" title="Create task from template">
+            <span class="template-icon">📋</span> New from Template
+          </button>
         </div>
 
         \${board.columns.map(col => \`
@@ -3384,27 +4141,31 @@ columns:
 </head>
 <body>
   <div class="error-title">Error: ${this.escapeHtml(message)}</div>
-  ${details ? `<div class="error-details">${this.escapeHtml(details)}</div>` : ''}
+  ${
+    details
+      ? `<div class="error-details">${this.escapeHtml(details)}</div>`
+      : ""
+  }
 </body>
 </html>`;
   }
 
   private escapeHtml(text: string): string {
     return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 
   private renderMarkdown(text: string | undefined): string {
-    if (!text) return '';
+    if (!text) return "";
 
     // Configure marked for safe rendering
     marked.setOptions({
       breaks: true,
-      gfm: true
+      gfm: true,
     });
 
     // Parse markdown and sanitize
@@ -3423,11 +4184,11 @@ columns:
     }
 
     // Dispose all tracked disposables
-    this._disposables.forEach(d => {
+    this._disposables.forEach((d) => {
       try {
         d.dispose();
       } catch (error) {
-        log('Error disposing resource:', error);
+        log("Error disposing resource:", error);
       }
     });
     this._disposables = [];
@@ -3435,6 +4196,6 @@ columns:
     // Clear view reference
     this._view = undefined;
 
-    log('BoardViewProvider disposed');
+    log("BoardViewProvider disposed");
   }
 }
