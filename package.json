@@ -2,7 +2,7 @@
   "name": "brainfile",
   "displayName": "Brainfile",
   "description": "Task management protocol for AI-assisted development",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "publisher": "brainfile",
   "icon": "icon.png",
   "repository": {
