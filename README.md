@@ -1,84 +1,161 @@
-# Brainfile
+# Brainfile for VSCode
 
-Task management protocol for AI-assisted development.
+**A protocol-first task management system for AI-assisted development.**
 
-Built on [@brainfile/core](https://www.npmjs.com/package/@brainfile/core) - the official Brainfile parser and serializer.
+Brainfile provides a visual kanban board interface for managing tasks defined in `brainfile.md` files using YAML frontmatter. Built on [@brainfile/core](https://www.npmjs.com/package/@brainfile/core) - the official Brainfile parser and serializer.
 
-## Features
+![Brainfile VSCode Extension](https://raw.githubusercontent.com/brainfile/vscode/main/icon.png)
 
-- View and manage tasks from `brainfile.md` files
-- Organize tasks in customizable columns
-- Define project rules (always, never, prefer, context)
-- Drag and drop tasks between columns
-- Live updates when editing the markdown file
-- Collapsible task sections
-- Progress tracking
-- **Task Templates**: Create tasks from predefined templates (Bug Report, Feature Request, Refactor)
+## ✨ Features
 
-## Usage
+- 📋 **Visual Kanban Board** - View and organize tasks in customizable columns
+- 🎯 **Drag & Drop** - Intuitive task movement between columns
+- 🔄 **Live Sync** - Automatic updates when editing markdown files
+- 📝 **Task Templates** - Pre-built templates for bugs, features, and refactors
+- ✅ **Progress Tracking** - Subtask completion and visual indicators
+- 🎨 **Priority Levels** - Color-coded task priorities (low, medium, high, critical)
+- 🏷️ **Tag Support** - Organize and filter tasks with tags
+- 📏 **Project Rules** - Define always/never/prefer/context rules for your team
+- 🤖 **AI-Friendly** - Designed for seamless AI agent integration
 
-1. Create a `brainfile.md` file in your project root
-2. Open the folder in VSCode
-3. The Brainfile sidebar will appear automatically
-4. View and manage your tasks
+## 🚀 Quick Start
 
-### Creating Tasks from Templates
+1. **Install the extension** from the VSCode Marketplace
+2. **Create a `brainfile.md` file** in your project root
+3. **Open the folder** in VSCode - the Brainfile sidebar appears automatically
+4. **Start managing tasks** with the visual board
 
-Brainfile includes built-in task templates to help you quickly create structured tasks:
-
-1. **Using the Command Palette**:
-   - Open Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
-   - Search for "Brainfile: Create Task from Template"
-   - Select a template (Bug Report, Feature Request, or Refactor)
-   - Fill in the required variables
-   - Select the column for the new task
-
-2. **Using the UI Button**:
-   - Click the "New from Template" button in the Brainfile sidebar
-   - Follow the prompts to create a task
-
-3. **Available Templates**:
-   - **Bug Report**: For tracking bugs with reproduction steps, expected/actual behavior
-   - **Feature Request**: For proposing new features with use cases and acceptance criteria
-   - **Code Refactor**: For refactoring tasks with scope, motivation, and testing plan
-
-Each template automatically includes:
-- Pre-configured priority level
-- Relevant tags
-- Structured description with markdown formatting
-- Related subtasks for tracking implementation steps
-- Template type field for categorization
-
-## File Format
-
-Tasks are defined in YAML frontmatter:
+## 📝 Example brainfile.md
 
 ```yaml
 ---
+schema: https://brainfile.md/v1
 title: My Project
-rules:
-  always:
-    - id: 1
-      rule: write tests for all new features
-  never:
-    - id: 1
-      rule: commit directly to main branch
+agent:
+  instructions:
+    - Modify only the YAML frontmatter
+    - Preserve all IDs
 columns:
   - id: todo
     title: To Do
     tasks:
       - id: task-1
-        title: Task Title
-        description: Task description
+        title: Implement user authentication
+        priority: high
+        tags: [backend, security]
+  - id: in-progress
+    title: In Progress
+    tasks: []
+  - id: done
+    title: Done
+    tasks: []
 ---
+
+# My Project Tasks
+
+This is your task board.
 ```
 
-## Related Tools
+## 🎨 Creating Tasks from Templates
 
-- **[@brainfile/core](https://www.npmjs.com/package/@brainfile/core)** - Core parsing and serialization library
-- **[@brainfile/cli](https://www.npmjs.com/package/@brainfile/cli)** - Command-line interface for Brainfile
-- **[Protocol Documentation](https://brainfile.md)** - Full Brainfile protocol specification
+### Built-in Templates
 
-## License
+**Bug Report** 🐛
+- Pre-configured with high priority
+- Includes reproduction steps structure
+- Tags: bug, needs-triage
 
-MIT
+**Feature Request** ✨
+- Pre-configured with medium priority  
+- Includes use cases and acceptance criteria
+- Tags: feature, enhancement
+
+**Code Refactor** 🔧
+- Pre-configured with low priority
+- Includes analysis and testing plan
+- Tags: refactor, technical-debt
+
+### How to Use Templates
+
+**Via Command Palette:**
+1. Press `Ctrl+Shift+P` (or `Cmd+Shift+P` on Mac)
+2. Type "Brainfile: Create Task from Template"
+3. Select your template
+4. Fill in the details
+5. Choose the target column
+
+**Via UI Button:**
+- Click "New from Template" in the Brainfile sidebar
+- Follow the prompts
+
+## 🔧 Commands
+
+- **Brainfile: Refresh** - Manually refresh the task board
+- **Brainfile: Create Board** - Initialize a new brainfile.md
+- **Brainfile: Add Task** - Quick task creation
+- **Brainfile: Create Task from Template** - Create from built-in templates
+
+## ⌨️ Keyboard Shortcuts
+
+- `Ctrl+Shift+T` / `Cmd+Shift+T` - Add new task (when board is active)
+
+## 🔗 Ecosystem
+
+The Brainfile extension is part of a complete task management ecosystem:
+
+- **[Documentation](https://brainfile.md)** - Complete protocol specification and guides
+- **[@brainfile/core](https://www.npmjs.com/package/@brainfile/core)** - Core TypeScript/JavaScript library
+- **[@brainfile/cli](https://www.npmjs.com/package/@brainfile/cli)** - Command-line interface
+- **[Protocol](https://github.com/brainfile/protocol)** - Schema and specification
+
+## 🤝 Integration with Other Tools
+
+**CLI Tool:**
+```bash
+# Install globally
+npm install -g @brainfile/cli
+
+# Add tasks from terminal
+brainfile add --title "Fix login bug" --priority high
+
+# Changes sync automatically with VSCode
+```
+
+**AI Agents:**  
+Brainfile is designed for AI agent compatibility. The extension respects agent instructions in your brainfile.md:
+
+```yaml
+agent:
+  instructions:
+    - Modify only the YAML frontmatter
+    - Preserve all IDs
+    - Keep ordering
+```
+
+Learn more: [AI Agent Integration Guide](https://brainfile.md/agents/integration/)
+
+## 📚 Documentation
+
+- **[Getting Started](https://brainfile.md/getting-started/quick-start/)** - Comprehensive quick start guide
+- **[Protocol Specification](https://brainfile.md/protocol/specification/)** - Complete file format documentation
+- **[VSCode Extension Guide](https://brainfile.md/vscode/extension/)** - Detailed usage instructions
+- **[Templates](https://brainfile.md/core/templates/)** - Learn about task templates
+
+## 🐛 Issues & Support
+
+- **[Report Issues](https://github.com/brainfile/vscode/issues)** - Bug reports and feature requests
+- **[Discussions](https://github.com/brainfile/protocol/discussions)** - Questions and community support
+- **[Support](SUPPORT.md)** - Get help
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) file for details
+
+## 🌟 Contributing
+
+Contributions are welcome! See the [Contributing Guide](https://github.com/brainfile/protocol/blob/main/CONTRIBUTING.md)
+
+---
+
+**Made with ❤️ by the Brainfile team**  
+Website: [brainfile.md](https://brainfile.md) | GitHub: [@brainfile](https://github.com/brainfile)

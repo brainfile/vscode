@@ -1,13 +1,33 @@
 {
   "name": "brainfile",
   "displayName": "Brainfile",
-  "description": "Task management protocol for AI-assisted development",
-  "version": "0.4.4",
+  "description": "Protocol-first task management for AI-assisted development. Visual kanban board for brainfile.md files.",
+  "version": "0.4.5",
   "publisher": "brainfile",
+  "license": "MIT",
   "icon": "icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/brainfile/vscode"
+  },
+  "homepage": "https://brainfile.md",
+  "bugs": {
+    "url": "https://github.com/brainfile/vscode/issues"
+  },
+  "keywords": [
+    "task management",
+    "kanban",
+    "todo",
+    "brainfile",
+    "ai",
+    "productivity",
+    "project management",
+    "markdown",
+    "yaml"
+  ],
+  "galleryBanner": {
+    "color": "#000000",
+    "theme": "dark"
   },
   "engines": {
     "vscode": "^1.85.0"
