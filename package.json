@@ -4,6 +4,7 @@
   "description": "Task management protocol for AI-assisted development",
   "version": "0.4.3",
   "publisher": "brainfile",
+  "icon": "icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/brainfile/vscode"

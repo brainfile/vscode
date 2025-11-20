@@ -2,6 +2,8 @@
 
 Task management protocol for AI-assisted development.
 
+Built on [@brainfile/core](https://www.npmjs.com/package/@brainfile/core) - the official Brainfile parser and serializer.
+
 ## Features
 
 - View and manage tasks from `brainfile.md` files
@@ -70,3 +72,13 @@ columns:
         description: Task description
 ---
 ```
+
+## Related Tools
+
+- **[@brainfile/core](https://www.npmjs.com/package/@brainfile/core)** - Core parsing and serialization library
+- **[@brainfile/cli](https://www.npmjs.com/package/@brainfile/cli)** - Command-line interface for Brainfile
+- **[Protocol Documentation](https://brainfile.md)** - Full Brainfile protocol specification
+
+## License
+
+MIT
