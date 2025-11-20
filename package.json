@@ -95,7 +95,7 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "@brainfile/core": "file:../packages/brainfile-core",
+    "@brainfile/core": "^0.1.0",
     "@types/marked": "^5.0.2",
     "js-yaml": "^4.1.0",
     "marked": "^17.0.0"
