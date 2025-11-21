@@ -1,0 +1,254 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Brainfile Markdown",
+  "scopeName": "text.html.markdown.brainfile",
+  "injectionSelector": "L:text.html.markdown",
+  "patterns": [
+    {
+      "include": "#frontmatter"
+    }
+  ],
+  "repository": {
+    "frontmatter": {
+      "patterns": [
+        {
+          "name": "meta.frontmatter.brainfile",
+          "begin": "\\A(-{3})\\s*$",
+          "end": "^(-{3}|\\.{3})\\s*$",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.definition.frontmatter.begin.brainfile"
+            }
+          },
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.definition.frontmatter.end.brainfile"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#priority"
+            },
+            {
+              "include": "#status"
+            },
+            {
+              "include": "#task-id"
+            },
+            {
+              "include": "#column-id"
+            },
+            {
+              "include": "#tags"
+            },
+            {
+              "include": "#rules"
+            },
+            {
+              "include": "#yaml-keys"
+            }
+          ]
+        }
+      ]
+    },
+    "priority": {
+      "patterns": [
+        {
+          "name": "meta.priority.critical.brainfile",
+          "match": "(?<=priority:\\s*)critical\\b",
+          "captures": {
+            "0": {
+              "name": "constant.language.priority.critical.brainfile"
+            }
+          }
+        },
+        {
+          "name": "meta.priority.high.brainfile",
+          "match": "(?<=priority:\\s*)high\\b",
+          "captures": {
+            "0": {
+              "name": "constant.language.priority.high.brainfile"
+            }
+          }
+        },
+        {
+          "name": "meta.priority.medium.brainfile",
+          "match": "(?<=priority:\\s*)medium\\b",
+          "captures": {
+            "0": {
+              "name": "constant.language.priority.medium.brainfile"
+            }
+          }
+        },
+        {
+          "name": "meta.priority.low.brainfile",
+          "match": "(?<=priority:\\s*)low\\b",
+          "captures": {
+            "0": {
+              "name": "constant.language.priority.low.brainfile"
+            }
+          }
+        }
+      ]
+    },
+    "status": {
+      "patterns": [
+        {
+          "name": "meta.status.completed.brainfile",
+          "match": "(?<=completed:\\s*)(true|done)\\b",
+          "captures": {
+            "0": {
+              "name": "constant.language.status.completed.brainfile"
+            }
+          }
+        },
+        {
+          "name": "meta.status.in-progress.brainfile",
+          "match": "(?<=status:\\s*)in-progress\\b",
+          "captures": {
+            "0": {
+              "name": "constant.language.status.in-progress.brainfile"
+            }
+          }
+        },
+        {
+          "name": "meta.status.blocked.brainfile",
+          "match": "(?<=status:\\s*)blocked\\b",
+          "captures": {
+            "0": {
+              "name": "constant.language.status.blocked.brainfile"
+            }
+          }
+        },
+        {
+          "name": "meta.status.todo.brainfile",
+          "match": "(?<=status:\\s*)todo\\b",
+          "captures": {
+            "0": {
+              "name": "constant.language.status.todo.brainfile"
+            }
+          }
+        },
+        {
+          "name": "meta.status.pending.brainfile",
+          "match": "(?<=completed:\\s*)false\\b",
+          "captures": {
+            "0": {
+              "name": "constant.language.status.pending.brainfile"
+            }
+          }
+        }
+      ]
+    },
+    "task-id": {
+      "patterns": [
+        {
+          "name": "meta.task.id.brainfile",
+          "match": "(?<=^\\s*-\\s+id:\\s*)([a-zA-Z0-9_-]+)",
+          "captures": {
+            "1": {
+              "name": "entity.name.tag.task-id.brainfile"
+            }
+          }
+        }
+      ]
+    },
+    "column-id": {
+      "patterns": [
+        {
+          "name": "meta.column.id.brainfile",
+          "match": "(?<=^\\s*-\\s+id:\\s*)(todo|in-progress|done|blocked|review|issues|backlog)\\b",
+          "captures": {
+            "1": {
+              "name": "entity.name.type.column-id.brainfile"
+            }
+          }
+        }
+      ]
+    },
+    "tags": {
+      "patterns": [
+        {
+          "name": "meta.tags.brainfile",
+          "begin": "(?<=tags:\\s*)\\[",
+          "end": "\\]",
+          "patterns": [
+            {
+              "name": "string.quoted.double.tag.brainfile",
+              "match": "([a-zA-Z0-9_-]+)",
+              "captures": {
+                "1": {
+                  "name": "entity.name.tag.brainfile"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "rules": {
+      "patterns": [
+        {
+          "name": "meta.rules.always.brainfile",
+          "match": "^\\s*(always):",
+          "captures": {
+            "1": {
+              "name": "keyword.control.rules.always.brainfile"
+            }
+          }
+        },
+        {
+          "name": "meta.rules.never.brainfile",
+          "match": "^\\s*(never):",
+          "captures": {
+            "1": {
+              "name": "keyword.control.rules.never.brainfile"
+            }
+          }
+        },
+        {
+          "name": "meta.rules.prefer.brainfile",
+          "match": "^\\s*(prefer):",
+          "captures": {
+            "1": {
+              "name": "keyword.control.rules.prefer.brainfile"
+            }
+          }
+        },
+        {
+          "name": "meta.rules.context.brainfile",
+          "match": "^\\s*(context):",
+          "captures": {
+            "1": {
+              "name": "keyword.control.rules.context.brainfile"
+            }
+          }
+        }
+      ]
+    },
+    "yaml-keys": {
+      "patterns": [
+        {
+          "name": "meta.yaml.key.brainfile",
+          "match": "^\\s*(title|description|template|schema|agent|instructions|rule|columns|tasks|subtasks|relatedFiles|statsConfig):",
+          "captures": {
+            "1": {
+              "name": "entity.name.tag.yaml.key.brainfile"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+

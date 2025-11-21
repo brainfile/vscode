@@ -9,8 +9,9 @@ vsc-extension-quickstart.md
 **/*.map
 **/*.ts
 .npm-cache/**
-../packages/**
+../**
 node_modules/@bangbang/core/**
+node_modules/@brainfile/**
 node_modules/**/test/**
 node_modules/**/tests/**
 esbuild.js

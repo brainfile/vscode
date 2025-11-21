@@ -4,6 +4,7 @@ agent:
   instructions:
     - Modify only the YAML frontmatter
     - Preserve all IDs
+    - Use task-[nubmer] format for tasks
     - Keep ordering
     - Make minimal changes
     - Preserve unknown fields

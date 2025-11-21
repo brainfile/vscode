@@ -2,7 +2,7 @@
   "name": "brainfile",
   "displayName": "Brainfile",
   "description": "Protocol-first task management for AI-assisted development. Visual kanban board for brainfile.md files.",
-  "version": "0.4.5",
+  "version": "0.7.0",
   "publisher": "brainfile",
   "license": "MIT",
   "icon": "icon.png",
@@ -56,11 +56,6 @@
         "command": "brainfile.addTask",
         "title": "Brainfile: Add Task",
         "icon": "$(add)"
-      },
-      {
-        "command": "brainfile.createFromTemplate",
-        "title": "Brainfile: Create Task from Template",
-        "icon": "$(file-code)"
       }
     ],
     "keybindings": [
@@ -89,6 +84,52 @@
           "contextualTitle": "Brainfile Tasks"
         }
       ]
+    },
+    "grammars": [
+      {
+        "scopeName": "text.html.markdown.brainfile",
+        "path": "./syntaxes/brainfile.tmLanguage.json",
+        "injectTo": [
+          "text.html.markdown"
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "Brainfile",
+      "properties": {
+        "brainfile.priorities.criticalColor": {
+          "type": "string",
+          "default": "#d64933",
+          "format": "color",
+          "description": "Color for CRITICAL priority tasks"
+        },
+        "brainfile.priorities.highColor": {
+          "type": "string",
+          "default": "#867530",
+          "format": "color",
+          "description": "Color for HIGH priority tasks"
+        },
+        "brainfile.priorities.mediumColor": {
+          "type": "string",
+          "default": "#37505C",
+          "format": "color",
+          "description": "Color for MEDIUM priority tasks"
+        },
+        "brainfile.priorities.lowColor": {
+          "type": "string",
+          "default": "#bac1b8",
+          "format": "color",
+          "description": "Color for LOW priority tasks"
+        },
+        "brainfile.priorities.custom": {
+          "type": "object",
+          "default": {},
+          "description": "Custom priority colors. Add your own priorities like 'giga': '#ff00ff'",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
     }
   },
   "scripts": {
@@ -116,7 +157,7 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "@brainfile/core": "^0.1.0",
+    "@brainfile/core": "file:../core",
     "@types/marked": "^5.0.2",
     "js-yaml": "^4.1.0",
     "marked": "^17.0.0"

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { BoardViewProvider } from './boardViewProvider';
+import { BrainfileCompletionProvider } from './completionProvider';
 
 const LOG_PREFIX = '[Brainfile]';
 
@@ -52,12 +53,18 @@ export function activate(context: vscode.ExtensionContext) {
       })
     );
 
+    // Register completion provider for brainfile.md files
+    const completionProvider = new BrainfileCompletionProvider();
     context.subscriptions.push(
-      vscode.commands.registerCommand('brainfile.createFromTemplate', () => {
-        log('Creating task from template');
-        provider.createFromTemplate();
-      })
+      vscode.languages.registerCompletionItemProvider(
+        { pattern: '**/*brainfile.md', scheme: 'file' },
+        completionProvider,
+        ' ', // Trigger on space
+        ':', // Trigger on colon
+        '-'  // Trigger on dash (for arrays)
+      )
     );
+    log('Completion provider registered');
 
     // Set context for keybinding
     vscode.commands.executeCommand('setContext', 'brainfile.boardActive', true);

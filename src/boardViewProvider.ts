@@ -6,13 +6,15 @@ import { log } from "./extension";
 import {
   BrainfileParser,
   BrainfileSerializer,
+  BrainfileLinter,
   Board,
   Subtask,
   TaskTemplate,
   Task,
   BUILT_IN_TEMPLATES,
   processTemplate,
-  generateTaskId
+  generateTaskId,
+  LintResult
 } from "@brainfile/core";
 
 // Read package.json for version info
@@ -233,121 +235,6 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
     return [...BUILT_IN_TEMPLATES, ...userTemplates];
   }
 
-  public async createFromTemplate() {
-    if (!this._boardFilePath) {
-      vscode.window.showErrorMessage("No Brainfile board found");
-      return;
-    }
-
-    // Get all available templates
-    const templates = this.getAllTemplates();
-    if (templates.length === 0) {
-      vscode.window.showErrorMessage("No templates available");
-      return;
-    }
-
-    // Show template picker
-    const templateOptions = templates.map((template) => ({
-      label: template.name,
-      description: template.description,
-      detail: template.isBuiltIn ? "Built-in template" : "User template",
-      template: template,
-    }));
-
-    const selectedTemplate = await vscode.window.showQuickPick(
-      templateOptions,
-      {
-        placeHolder: "Select a template",
-        canPickMany: false,
-      }
-    );
-
-    if (!selectedTemplate) {
-      return;
-    }
-
-    const template = selectedTemplate.template;
-    const variableValues: Record<string, string> = {};
-
-    // Collect variable values if template has variables
-    if (template.variables && template.variables.length > 0) {
-      for (const variable of template.variables) {
-        const value = await vscode.window.showInputBox({
-          prompt: variable.description,
-          placeHolder: variable.defaultValue || `Enter ${variable.name}`,
-          validateInput: (value) => {
-            if (variable.required && (!value || value.trim().length === 0)) {
-              return `${variable.name} is required`;
-            }
-            return null;
-          },
-        });
-
-        if (value === undefined) {
-          // User cancelled
-          return;
-        }
-
-        variableValues[variable.name] = value || variable.defaultValue || "";
-      }
-    }
-
-    // Process the template with variable substitution
-    const processedTask = processTemplate(template, variableValues);
-
-    // Get column selection
-    const content = fs.readFileSync(this._boardFilePath, "utf8");
-    const board = BrainfileParser.parse(content);
-    if (!board) {
-      vscode.window.showErrorMessage("Failed to parse board");
-      return;
-    }
-
-    const columnOptions = board.columns.map((col) => ({
-      label: col.title,
-      description: `${col.tasks.length} tasks`,
-      id: col.id,
-    }));
-
-    const selectedColumn = await vscode.window.showQuickPick(columnOptions, {
-      placeHolder: "Select column for new task",
-      canPickMany: false,
-    });
-
-    const columnId = selectedColumn?.id || "todo";
-
-    // Generate next task ID
-    const allTaskIds = board.columns.flatMap((col) =>
-      col.tasks.map((t) => parseInt(t.id.replace("task-", "")) || 0)
-    );
-    const maxId = Math.max(0, ...allTaskIds);
-    const newTaskId = `task-${maxId + 1}`;
-
-    // Create the new task with the generated ID
-    const newTask: Task = {
-      id: newTaskId,
-      ...processedTask,
-    } as Task;
-
-    // Add task to the selected column
-    const column = board.columns.find((col) => col.id === columnId);
-    if (column) {
-      column.tasks.push(newTask);
-
-      // Save the updated board
-      const newContent = BrainfileSerializer.serialize(board);
-      this.debouncedWrite(newContent, () => {
-        log(`Created task ${newTaskId} from template ${template.name}`);
-        vscode.window.showInformationMessage(
-          `Created task "${newTask.title}" from template "${template.name}"`
-        );
-      });
-
-      // Update the view
-      this.updateView();
-    }
-  }
-
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
@@ -372,6 +259,14 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
       this.watchFile();
     });
 
+    // Listen for settings changes to update priority colors immediately
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("brainfile.priorities")) {
+        log("Priority settings changed, forcing full refresh");
+        this.updateView(true); // Force full refresh to regenerate CSS
+      }
+    });
+
     // Handle messages from webview
     webviewView.webview.onDidReceiveMessage((data) => {
       log("Received message from webview:", data.type, data);
@@ -386,6 +281,9 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
           break;
         case "editTask":
           this.handleEditTask(data.taskId);
+          break;
+        case "editPriority":
+          this.handleEditPriority(data.taskId);
           break;
         case "deleteTask":
           this.handleDeleteTask(data.columnId, data.taskId);
@@ -407,8 +305,14 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
         case "clearCache":
           this.handleClearCache();
           break;
+        case "openSettings":
+          vscode.commands.executeCommand('workbench.action.openSettings', 'brainfile');
+          break;
         case "archiveTask":
           this.handleArchiveTask(data.columnId, data.taskId);
+          break;
+        case "completeTask":
+          this.handleMoveTask(data.taskId, data.columnId, "done", 0);
           break;
         case "addTaskToColumn":
           this.handleAddTaskToColumn(data.columnId);
@@ -428,8 +332,11 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
         case "saveStatsConfig":
           this.handleSaveStatsConfig(data.columns);
           break;
-        case "createFromTemplate":
-          this.createFromTemplate();
+        case "fix-issues":
+          this.handleFixIssues();
+          break;
+        case "refresh":
+          this.handleRefresh();
           break;
       }
     });
@@ -719,10 +626,12 @@ columns:
           return;
         }
 
-        // If no valid board or too many consecutive errors, show error page
+        // If no valid board or too many consecutive errors, show error page with lint results
+        const lintResult = BrainfileLinter.lint(content);
         this._view.webview.html = this.getErrorHtml(
           "Failed to parse brainfile.md",
-          "Check for YAML syntax errors in the frontmatter. Common issues:\n• Missing colons after keys\n• Incorrect indentation\n• Unclosed quotes or brackets"
+          "Check for YAML syntax errors in the frontmatter. Common issues:\n• Missing colons after keys\n• Incorrect indentation\n• Unclosed quotes or brackets",
+          lintResult
         );
         return;
       }
@@ -967,6 +876,77 @@ columns:
     }
   }
 
+  private async handleEditPriority(taskId: string) {
+    if (!this._boardFilePath) return;
+
+    try {
+      const content = fs.readFileSync(this._boardFilePath, "utf8");
+      const board = BrainfileParser.parse(content);
+      if (!board) return;
+
+      // Find the task
+      let targetTask: { task: Task; columnId: string } | null = null;
+      for (const col of board.columns) {
+        const task = col.tasks.find((t) => t.id === taskId);
+        if (task) {
+          targetTask = { task, columnId: col.id };
+          break;
+        }
+      }
+
+      if (!targetTask) {
+        vscode.window.showErrorMessage(`Could not find task ${taskId}`);
+        return;
+      }
+
+      const priorities = [
+        { label: "critical", description: "Highest priority" },
+        { label: "high", description: "High priority" },
+        { label: "medium", description: "Medium priority" },
+        { label: "low", description: "Low priority" },
+        { label: "$(edit) Custom...", description: "Enter a custom priority" },
+        { label: "$(close) Remove priority", description: "Remove priority from task" },
+      ];
+
+      const selected = await vscode.window.showQuickPick(priorities, {
+        placeHolder: `Current: ${targetTask.task.priority || "none"}`,
+        title: "Select Priority",
+      });
+
+      if (!selected) return;
+
+      let newPriority: string | undefined;
+
+      if (selected.label === "$(close) Remove priority") {
+        newPriority = undefined;
+      } else if (selected.label === "$(edit) Custom...") {
+        const custom = await vscode.window.showInputBox({
+          prompt: "Enter custom priority",
+          value: targetTask.task.priority || "",
+        });
+        if (custom === undefined) return;
+        newPriority = custom || undefined;
+      } else {
+        newPriority = selected.label;
+      }
+
+      // Update the task priority (cast to any since we support custom priorities)
+      (targetTask.task as any).priority = newPriority;
+
+      const newContent = BrainfileSerializer.serialize(board);
+      fs.writeFileSync(this._boardFilePath, newContent, "utf8");
+
+      // Update hash to prevent double update
+      this._lastContentHash = this.hashContent(newContent);
+
+      log(`Updated priority for task ${taskId} to: ${newPriority || "none"}`);
+      this.updateView();
+    } catch (error) {
+      log("Error updating priority:", error);
+      vscode.window.showErrorMessage("Failed to update priority");
+    }
+  }
+
   private async highlightTask(
     editor: vscode.TextEditor,
     taskId: string,
@@ -1164,6 +1144,90 @@ columns:
       log("Error saving stats config:", error);
       vscode.window.showErrorMessage("Failed to save stats configuration");
     }
+  }
+
+  private async handleFixIssues() {
+    if (!this._boardFilePath) {
+      vscode.window.showErrorMessage("No brainfile.md file found");
+      return;
+    }
+
+    try {
+      log("Running auto-fix on brainfile.md");
+      
+      // Read current content
+      const content = fs.readFileSync(this._boardFilePath, "utf8");
+      
+      // Run linter with auto-fix
+      const result = BrainfileLinter.lint(content, { autoFix: true });
+      
+      if (!result.fixedContent) {
+        vscode.window.showInformationMessage("No fixable issues found");
+        return;
+      }
+      
+      // Show preview in diff editor
+      const fixedUri = vscode.Uri.parse(`untitled:${path.basename(this._boardFilePath)}.fixed`);
+      const originalUri = vscode.Uri.file(this._boardFilePath);
+      
+      // Ask user to confirm
+      const choice = await vscode.window.showInformationMessage(
+        `Found ${result.issues.filter(i => i.fixable).length} fixable issue(s). Apply fixes?`,
+        { modal: true },
+        "Apply Fixes",
+        "Preview Changes"
+      );
+      
+      if (choice === "Preview Changes") {
+        // Show diff
+        const fixedDoc = await vscode.workspace.openTextDocument({
+          content: result.fixedContent,
+          language: "markdown"
+        });
+        
+        await vscode.commands.executeCommand(
+          "vscode.diff",
+          originalUri,
+          fixedDoc.uri,
+          "brainfile.md: Original ↔ Fixed"
+        );
+        
+        // Ask again after preview
+        const applyChoice = await vscode.window.showInformationMessage(
+          "Apply these fixes?",
+          "Apply Fixes",
+          "Cancel"
+        );
+        
+        if (applyChoice !== "Apply Fixes") {
+          return;
+        }
+      } else if (choice !== "Apply Fixes") {
+        return;
+      }
+      
+      // Apply the fixes
+      fs.writeFileSync(this._boardFilePath, result.fixedContent, "utf8");
+      this._lastContentHash = this.hashContent(result.fixedContent);
+      
+      vscode.window.showInformationMessage(
+        `Fixed ${result.issues.filter(i => i.fixable).length} issue(s) successfully!`
+      );
+      
+      // Refresh the view
+      this.refresh();
+      
+    } catch (error) {
+      log("Error fixing issues:", error);
+      vscode.window.showErrorMessage(
+        `Failed to fix issues: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  private handleRefresh() {
+    log("Manual refresh triggered from error page");
+    this.refresh();
   }
 
   private getArchivePath(): string | undefined {
@@ -1591,6 +1655,42 @@ columns:
     return text;
   }
 
+  private getPriorityClassName(priority: string): string {
+    return `priority-${priority.toLowerCase().replace(/[^a-z0-9]/g, "-")}`;
+  }
+
+  private getDynamicPriorityCSS(): string {
+    const config = vscode.workspace.getConfiguration("brainfile.priorities");
+
+    // Built-in priority colors from settings
+    const criticalColor = config.get<string>("criticalColor", "#ffffff");
+    const highColor = config.get<string>("highColor", "#cccccc");
+    const mediumColor = config.get<string>("mediumColor", "#999999");
+    const lowColor = config.get<string>("lowColor", "#666666");
+    const customPriorities = config.get<Record<string, string>>("custom", {});
+
+    let css = "/* Priority colors from settings */\n";
+
+    // Override built-in priority colors
+    css += `    .task.priority-critical { border-left-color: ${criticalColor}; }\n`;
+    css += `    .task-priority-label.priority-critical { color: ${criticalColor}; }\n`;
+    css += `    .task.priority-high { border-left-color: ${highColor}; }\n`;
+    css += `    .task-priority-label.priority-high { color: ${highColor}; }\n`;
+    css += `    .task.priority-medium { border-left-color: ${mediumColor}; }\n`;
+    css += `    .task-priority-label.priority-medium { color: ${mediumColor}; }\n`;
+    css += `    .task.priority-low { border-left-color: ${lowColor}; }\n`;
+    css += `    .task-priority-label.priority-low { color: ${lowColor}; }\n`;
+
+    // Custom priorities
+    for (const [priority, color] of Object.entries(customPriorities)) {
+      const className = this.getPriorityClassName(priority);
+      css += `    .task.${className} { border-left-color: ${color}; }\n`;
+      css += `    .task-priority-label.${className} { color: ${color}; }\n`;
+    }
+
+    return css;
+  }
+
   private getSubtaskProgress(subtasks: Subtask[]): number {
     if (!subtasks || subtasks.length === 0) return 0;
     const completed = subtasks.filter((st) => st.completed).length;
@@ -1813,60 +1913,41 @@ columns:
       opacity: 0.6;
     }
 
-    /* Task metadata styles */
+    /* Task metadata styles - minimal */
     .task-metadata {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
-      margin-top: 8px;
+      align-items: center;
+      gap: 4px;
+      margin-top: 6px;
+      padding-left: 20px;
       font-size: 10px;
     }
 
-    .task-priority {
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.02em;
+    .task-tag {
+      color: var(--vscode-descriptionForeground);
+      opacity: 0.6;
     }
 
-    .task-priority.priority-critical {
-      background: rgba(239, 68, 68, 0.2);
-      color: #ef4444;
-      border: 1px solid rgba(239, 68, 68, 0.3);
+    .task-tag::before {
+      content: '·';
+      margin-right: 4px;
+      opacity: 0.4;
     }
 
-    .task-priority.priority-high {
-      background: rgba(251, 146, 60, 0.2);
-      color: #fb923c;
-      border: 1px solid rgba(251, 146, 60, 0.3);
-    }
-
-    .task-priority.priority-medium {
-      background: rgba(250, 204, 21, 0.2);
-      color: #facc15;
-      border: 1px solid rgba(250, 204, 21, 0.3);
-    }
-
-    .task-priority.priority-low {
-      background: rgba(134, 239, 172, 0.2);
-      color: #86efac;
-      border: 1px solid rgba(134, 239, 172, 0.3);
+    .task-tag:first-child::before {
+      content: none;
+      margin-right: 0;
     }
 
     .task-assignee {
-      padding: 2px 6px;
-      background: var(--vscode-badge-background);
-      color: var(--vscode-badge-foreground);
-      border-radius: 3px;
+      color: var(--vscode-descriptionForeground);
+      opacity: 0.7;
     }
 
-    .task-tag {
-      padding: 2px 6px;
-      background: var(--vscode-textCodeBlock-background);
-      color: var(--vscode-descriptionForeground);
-      border-radius: 3px;
-      opacity: 0.8;
+    .task-assignee::before {
+      content: '@';
+      opacity: 0.5;
     }
 
     .board-title-wrapper {
@@ -1943,6 +2024,25 @@ columns:
       color: var(--vscode-editor-foreground);
       border-bottom-color: var(--vscode-focusBorder);
       opacity: 0.95;
+    }
+
+    .settings-gear {
+      margin-left: auto;
+      background: transparent;
+      border: none;
+      padding: 6px 10px;
+      font-size: 14px;
+      color: var(--vscode-descriptionForeground);
+      cursor: pointer;
+      border-radius: 4px;
+      transition: all 0.15s;
+      opacity: 0.6;
+    }
+
+    .settings-gear:hover {
+      opacity: 1;
+      background: var(--vscode-toolbar-hoverBackground);
+      color: var(--vscode-foreground);
     }
 
     .tab-indicator {
@@ -2126,14 +2226,19 @@ columns:
       position: relative;
     }
 
+    /* Priority as left border - intensity based */
+    .task.priority-critical { border-left-color: #ffffff; }
+    .task.priority-high { border-left-color: rgba(255, 255, 255, 0.7); }
+    .task.priority-medium { border-left-color: rgba(255, 255, 255, 0.4); }
+    .task.priority-low { border-left-color: rgba(255, 255, 255, 0.15); }
+    .task.priority-unknown { border-left-color: rgba(255, 255, 255, 0.3); }
+
     .task:hover {
       background: var(--vscode-list-hoverBackground);
-      border-left-color: var(--vscode-list-activeSelectionBackground);
     }
 
     .task.expanded {
       background: var(--vscode-list-inactiveSelectionBackground);
-      border-left-color: var(--vscode-list-activeSelectionBackground);
     }
 
     .task.dragging {
@@ -2205,6 +2310,91 @@ columns:
     .task-action.delete:hover {
       background: var(--vscode-inputValidation-errorBackground);
       color: var(--vscode-inputValidation-errorForeground);
+    }
+
+    .task-action.complete:hover {
+      background: var(--vscode-testing-iconPassed);
+      color: var(--vscode-button-foreground);
+    }
+
+    .task-id {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--vscode-descriptionForeground);
+      opacity: 0.4;
+      padding: 2px 6px;
+      cursor: pointer;
+      border-radius: 3px;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+
+    .task-id:hover {
+      opacity: 1;
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+
+    /* Priority label in metadata row */
+    .task-priority-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      border-radius: 3px;
+      transition: all 0.15s;
+      color: var(--vscode-descriptionForeground);
+      opacity: 0.5;
+    }
+
+    .task-priority-label::after {
+      content: '·';
+      margin-left: 6px;
+      opacity: 0.4;
+      font-weight: normal;
+    }
+
+    .task-priority-label:hover {
+      opacity: 1;
+    }
+
+    /* Priority colors - intensity based */
+    .task-priority-label.priority-critical { color: #ffffff; opacity: 1; }
+    .task-priority-label.priority-high { color: rgba(255, 255, 255, 0.9); opacity: 0.85; }
+    .task-priority-label.priority-medium { color: rgba(255, 255, 255, 0.7); opacity: 0.65; }
+    .task-priority-label.priority-low { color: rgba(255, 255, 255, 0.5); opacity: 0.45; }
+    .task-priority-label.priority-critical:hover,
+    .task-priority-label.priority-high:hover,
+    .task-priority-label.priority-medium:hover,
+    .task-priority-label.priority-low:hover {
+      opacity: 1;
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+
+    ${this.getDynamicPriorityCSS()}
+
+    /* Toast notification */
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-size: 12px;
+      opacity: 0;
+      transition: all 0.3s ease;
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
     }
 
     .task-description {
@@ -2708,6 +2898,7 @@ columns:
   </style>
 </head>
 <body>
+  <div id="toast" class="toast"></div>
   <div class="header-top">
     <div class="board-title-wrapper">
       <div class="board-title" id="boardTitle">${this.escapeHtml(
@@ -2730,10 +2921,7 @@ columns:
       Archive
       <span class="tab-indicator"></span>
     </button>
-    <button class="tab" data-tab="settings">
-      Settings
-      <span class="tab-indicator"></span>
-    </button>
+    <button class="settings-gear" id="openSettings" title="Open Settings">⚙</button>
   </div>
 
   <div class="tab-content active" id="tasksTab">
@@ -2765,7 +2953,8 @@ columns:
       </div>
     </div>
 
-    ${board.columns
+    ${[...board.columns]
+      .sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity))
       .map(
         (col) => `
       <div class="column-section" data-column-id="${col.id}">
@@ -2787,7 +2976,7 @@ columns:
             : col.tasks
                 .map(
                   (task, index) => `
-            <div class="task"
+            <div class="task ${task.priority ? this.getPriorityClassName(task.priority) : ""}"
                  data-task-id="${task.id}"
                  data-column-id="${col.id}"
                  data-task-index="${index}"
@@ -2800,12 +2989,13 @@ columns:
               <div class="task-header">
                 <span class="drag-handle">⋮⋮</span>
                 <div class="task-title">${this.escapeHtml(task.title)}</div>
+                <div class="task-id" data-task-id="${task.id}" title="Click to copy">${task.id}</div>
                 <div class="task-actions">
                   <button class="task-action edit" data-action="edit" title="Edit">✎</button>
                   ${
                     col.id === "done"
                       ? '<button class="task-action archive" data-action="archive" title="Archive">⬇</button>'
-                      : ""
+                      : '<button class="task-action complete" data-action="complete" title="Mark as done">✓</button>'
                   }
                   <button class="task-action delete" data-action="delete" title="Delete">×</button>
                 </div>
@@ -2814,19 +3004,13 @@ columns:
                 task.description || ""
               )}</div>
               ${
-                task.priority ||
-                task.assignee ||
-                (task.tags && task.tags.length > 0)
+                task.priority || task.assignee || (task.tags && task.tags.length > 0)
                   ? `
                 <div class="task-metadata">
-                  ${
-                    task.priority
-                      ? `<span class="task-priority priority-${task.priority}">${task.priority}</span>`
-                      : ""
-                  }
+                  ${task.priority ? `<span class="task-priority-label ${this.getPriorityClassName(task.priority)}" data-task-id="${task.id}" title="Click to change priority">${this.escapeHtml(task.priority.toUpperCase())}</span>` : ""}
                   ${
                     task.assignee
-                      ? `<span class="task-assignee">@${this.escapeHtml(
+                      ? `<span class="task-assignee">${this.escapeHtml(
                           task.assignee
                         )}</span>`
                       : ""
@@ -2836,9 +3020,7 @@ columns:
                       ? task.tags
                           .map(
                             (tag) =>
-                              `<span class="task-tag">#${this.escapeHtml(
-                                tag
-                              )}</span>`
+                              `<span class="task-tag">${this.escapeHtml(tag)}</span>`
                           )
                           .join("")
                       : ""
@@ -3041,6 +3223,7 @@ columns:
             <div class="task-header">
               <div class="task-title">${this.escapeHtml(task.title)}</div>
             </div>
+            <div class="task-id" data-task-id="${task.id}" title="Click to copy task ID">${task.id}</div>
             <div class="task-description">${this.renderMarkdown(
               task.description
             )}</div>
@@ -3070,76 +3253,6 @@ columns:
         : '<div class="empty-state">No archived tasks</div>'
     }
   </div>
-
-  <div class="tab-content" id="settingsTab">
-    <div class="settings-view">
-      <div class="settings-section">
-        <div class="settings-section-title">Board Configuration</div>
-        <div class="settings-item">
-          <label class="settings-label">Board File Location</label>
-          <input type="text" class="settings-input" value="${
-            this._boardFilePath || "No file loaded"
-          }" readonly>
-          <div class="settings-description">The current brainfile.md file being displayed</div>
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <div class="settings-section-title">Stat Cards Configuration</div>
-        <div class="settings-item">
-          <label class="settings-label">Select columns to display as stat cards (max 4)</label>
-          <div class="stats-config-options">
-            ${board.columns
-              .map((col) => {
-                const isChecked =
-                  board.statsConfig?.columns?.includes(col.id) || false;
-                return `
-                <label class="checkbox-label">
-                  <input type="checkbox"
-                         class="stat-column-checkbox"
-                         data-column-id="${col.id}"
-                         ${isChecked ? "checked" : ""}>
-                  <span>${this.escapeHtml(col.title)}</span>
-                </label>
-              `;
-              })
-              .join("")}
-          </div>
-          <div class="settings-description">
-            Select which columns to display as stat cards. Leave all unchecked to use default (Total and Done).
-          </div>
-          <button class="edit-button primary" id="saveStatsConfig">Save Stats Configuration</button>
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <div class="settings-section-title">Developer</div>
-        <div class="settings-item">
-          <button class="edit-button primary" id="clearCacheBtn">Clear Cache & Reload Window</button>
-          <div class="settings-description">
-            Disposes all watchers and reloads VSCode. Useful for resolving stale state issues.
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <div class="settings-section-title">About</div>
-        <div class="settings-item">
-          <div class="settings-description">
-            <strong>Brainfile v${packageJson.version}</strong><br><br>
-            A protocol-first AI task management system.<br>
-            Edit your brainfile.md file directly to manage tasks and rules.<br><br>
-            <a href="${
-              packageJson.repository.url
-            }" style="color: var(--vscode-textLink-foreground); text-decoration: none;">
-              📦 View on GitHub
-            </a>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
@@ -3215,20 +3328,10 @@ columns:
       });
     }
 
-    // Template button handler
-    const templateBtn = document.getElementById('createFromTemplate');
-    if (templateBtn) {
-      templateBtn.addEventListener('click', () => {
-        vscode.postMessage({
-          type: 'createFromTemplate'
-        });
-      });
-    }
-
     // Task expansion
     document.querySelectorAll('.task').forEach(taskEl => {
       taskEl.addEventListener('click', (e) => {
-        if (e.target.closest('.task-action') || e.target.closest('.drag-handle') || e.target.closest('.related-file') || e.target.closest('.subtask-item')) {
+        if (e.target.closest('.task-action') || e.target.closest('.drag-handle') || e.target.closest('.related-file') || e.target.closest('.subtask-item') || e.target.closest('.task-id')) {
           return;
         }
         taskEl.classList.toggle('expanded');
@@ -3310,6 +3413,55 @@ columns:
       });
     });
 
+    // Complete action - moves task to done
+    document.querySelectorAll('[data-action="complete"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const taskEl = e.target.closest('.task');
+        const taskId = taskEl.dataset.taskId;
+        const columnId = taskEl.dataset.columnId;
+
+        vscode.postMessage({
+          type: 'completeTask',
+          columnId: columnId,
+          taskId: taskId
+        });
+      });
+    });
+
+    // Copy task ID to clipboard
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      setTimeout(() => {
+        toast.classList.remove('show');
+      }, 2000);
+    }
+
+    document.querySelectorAll('.task-id').forEach(idEl => {
+      idEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const taskId = idEl.dataset.taskId;
+        navigator.clipboard.writeText(taskId).then(() => {
+          showToast('Copied: ' + taskId);
+        }).catch(() => {
+          showToast('Failed to copy');
+        });
+      });
+    });
+
+    // Priority label click to edit
+    document.querySelectorAll('.task-priority-label').forEach(prioEl => {
+      prioEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const taskId = prioEl.dataset.taskId;
+        vscode.postMessage({
+          command: 'editPriority',
+          taskId: taskId
+        });
+      });
+    });
 
     // Drag and drop
     let draggedTask = null;
@@ -3474,6 +3626,16 @@ columns:
         document.getElementById(tabName + 'Tab').classList.add('active');
       });
     });
+
+    // Settings gear - open VS Code settings
+    const settingsBtn = document.getElementById('openSettings');
+    if (settingsBtn) {
+      settingsBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        vscode.postMessage({ type: 'openSettings' });
+      });
+    }
 
     // Title editing
     let originalTitle = '';
@@ -3657,12 +3819,9 @@ columns:
                    autocomplete="off">
             <button id="searchClear" class="search-clear" style="display: \${currentSearchTerm ? 'block' : 'none'};">×</button>
           </div>
-          <button id="createFromTemplate" class="template-button" title="Create task from template">
-            <span class="template-icon">📋</span> New from Template
-          </button>
         </div>
 
-        \${board.columns.map(col => \`
+        \${[...board.columns].sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity)).map(col => \`
           <div class="column-section" data-column-id="\${col.id}">
             <div class="column-header">
               <div class="column-header-title">
@@ -3677,7 +3836,7 @@ columns:
             \${col.tasks.length === 0
               ? '<div class="empty-state">No tasks</div>'
               : col.tasks.map((task, index) => \`
-                <div class="task"
+                <div class="task \${task.priority ? 'priority-' + task.priority.toLowerCase().replace(/[^a-z0-9]/g, '-') : ''}"
                      data-task-id="\${task.id}"
                      data-column-id="\${col.id}"
                      data-task-index="\${index}"
@@ -3688,19 +3847,20 @@ columns:
                   <div class="task-header">
                     <span class="drag-handle">⋮⋮</span>
                     <div class="task-title">\${escapeHtml(task.title)}</div>
+                    <div class="task-id" data-task-id="\${task.id}" title="Click to copy">\${task.id}</div>
                     <div class="task-actions">
                       <button class="task-action edit" data-action="edit" title="Edit">✎</button>
-                      \${col.id === 'done' ? '<button class="task-action archive" data-action="archive" title="Archive">⬇</button>' : ''}
+                      \${col.id === 'done' ? '<button class="task-action archive" data-action="archive" title="Archive">⬇</button>' : '<button class="task-action complete" data-action="complete" title="Mark as done">✓</button>'}
                       <button class="task-action delete" data-action="delete" title="Delete">×</button>
                     </div>
                   </div>
                   <div class="task-description">\${renderMarkdown(task.description || '')}</div>
                   \${(task.priority || task.assignee || (task.tags && task.tags.length > 0)) ? \`
                     <div class="task-metadata">
-                      \${task.priority ? \`<span class="task-priority priority-\${task.priority}">\${task.priority}</span>\` : ''}
-                      \${task.assignee ? \`<span class="task-assignee">@\${escapeHtml(task.assignee)}</span>\` : ''}
+                      \${task.priority ? \`<span class="task-priority-label priority-\${task.priority.toLowerCase().replace(/[^a-z0-9]/g, '-')}" data-task-id="\${task.id}" title="Click to change priority">\${escapeHtml(task.priority.toUpperCase())}</span>\` : ''}
+                      \${task.assignee ? \`<span class="task-assignee">\${escapeHtml(task.assignee)}</span>\` : ''}
                       \${task.tags && task.tags.length > 0 ? task.tags.map(tag =>
-                        \`<span class="task-tag">#\${escapeHtml(tag)}</span>\`
+                        \`<span class="task-tag">\${escapeHtml(tag)}</span>\`
                       ).join('') : ''}
                     </div>
                   \` : ''}
@@ -3799,6 +3959,7 @@ columns:
               <div class="task-header">
                 <div class="task-title">\${escapeHtml(task.title)}</div>
               </div>
+              <div class="task-id" data-task-id="\${task.id}" title="Click to copy task ID">\${task.id}</div>
               <div class="task-description">\${renderMarkdown(task.description)}</div>
               \${task.relatedFiles && task.relatedFiles.length > 0 ? \`
                 <div class="task-related-files">
@@ -3904,10 +4065,35 @@ columns:
       // Re-attach all task-related event listeners
       document.querySelectorAll('.task').forEach(taskEl => {
         taskEl.addEventListener('click', (e) => {
-          if (e.target.closest('.task-action') || e.target.closest('.drag-handle') || e.target.closest('.related-file') || e.target.closest('.subtask-item')) {
+          if (e.target.closest('.task-action') || e.target.closest('.drag-handle') || e.target.closest('.related-file') || e.target.closest('.subtask-item') || e.target.closest('.task-id') || e.target.closest('.task-priority-label')) {
             return;
           }
           taskEl.classList.toggle('expanded');
+        });
+      });
+
+      // Re-attach task-id copy clicks
+      document.querySelectorAll('.task-id').forEach(idEl => {
+        idEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const taskId = idEl.dataset.taskId;
+          navigator.clipboard.writeText(taskId).then(() => {
+            showToast('Copied: ' + taskId);
+          }).catch(() => {
+            showToast('Failed to copy');
+          });
+        });
+      });
+
+      // Re-attach priority label clicks
+      document.querySelectorAll('.task-priority-label').forEach(prioEl => {
+        prioEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const taskId = prioEl.dataset.taskId;
+          vscode.postMessage({
+            command: 'editPriority',
+            taskId: taskId
+          });
         });
       });
 
@@ -3979,6 +4165,22 @@ columns:
 
           vscode.postMessage({
             type: 'archiveTask',
+            columnId: columnId,
+            taskId: taskId
+          });
+        });
+      });
+
+      // Complete action - moves task to done
+      document.querySelectorAll('[data-action="complete"]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const taskEl = e.target.closest('.task');
+          const taskId = taskEl.dataset.taskId;
+          const columnId = taskEl.dataset.columnId;
+
+          vscode.postMessage({
+            type: 'completeTask',
             columnId: columnId,
             taskId: taskId
           });
@@ -4115,37 +4317,139 @@ columns:
 </html>`;
   }
 
-  private getErrorHtml(message: string, details?: string): string {
+  private getErrorHtml(message: string, details?: string, lintResult?: LintResult): string {
+    const hasFixableIssues = lintResult?.issues.some(i => i.fixable) || false;
+    const issuesList = lintResult?.issues.map(issue => {
+      const icon = issue.type === 'error' ? '❌' : '⚠️';
+      const fixable = issue.fixable ? ' [fixable]' : '';
+      const location = issue.line ? ` (line ${issue.line})` : '';
+      return `<li>${icon} ${this.escapeHtml(issue.message)}${location}${fixable}</li>`;
+    }).join('') || '';
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     body {
       padding: 20px;
       color: var(--vscode-foreground);
       font-family: var(--vscode-font-family);
     }
+    .error-container {
+      max-width: 600px;
+    }
     .error-title {
       color: var(--vscode-errorForeground);
       font-weight: bold;
       margin-bottom: 12px;
+      font-size: 1.2em;
     }
     .error-details {
       color: var(--vscode-descriptionForeground);
       white-space: pre-line;
       line-height: 1.6;
-      margin-top: 8px;
+      margin-top: 12px;
+      margin-bottom: 16px;
+    }
+    .issues-list {
+      background: var(--vscode-editor-background);
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 4px;
+      padding: 12px;
+      margin: 16px 0;
+    }
+    .issues-list h3 {
+      margin: 0 0 12px 0;
+      font-size: 1em;
+      color: var(--vscode-foreground);
+    }
+    .issues-list ul {
+      margin: 0;
+      padding-left: 20px;
+      list-style: none;
+    }
+    .issues-list li {
+      margin: 8px 0;
+      line-height: 1.5;
+    }
+    .action-buttons {
+      display: flex;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .btn {
+      padding: 8px 16px;
+      border: 1px solid var(--vscode-button-border);
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: var(--vscode-font-family);
+      font-size: 13px;
+    }
+    .btn-primary {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+    .btn-primary:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
+    .btn-secondary {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+    .btn-secondary:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
   </style>
 </head>
 <body>
-  <div class="error-title">Error: ${this.escapeHtml(message)}</div>
-  ${
-    details
-      ? `<div class="error-details">${this.escapeHtml(details)}</div>`
-      : ""
-  }
+  <div class="error-container">
+    <div class="error-title">${this.escapeHtml(message)}</div>
+    ${details ? `<div class="error-details">${this.escapeHtml(details)}</div>` : ""}
+    
+    ${lintResult && lintResult.issues.length > 0 ? `
+    <div class="issues-list">
+      <h3>Issues Found (${lintResult.issues.length}):</h3>
+      <ul>${issuesList}</ul>
+    </div>
+    ` : ''}
+    
+    <div class="action-buttons">
+      ${hasFixableIssues ? `
+        <button class="btn btn-primary" id="fix-issues-btn">
+          Fix Issues (${lintResult?.issues.filter(i => i.fixable).length})
+        </button>
+      ` : ''}
+      <button class="btn btn-secondary" id="refresh-btn">
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+    
+    const fixBtn = document.getElementById('fix-issues-btn');
+    if (fixBtn) {
+      fixBtn.addEventListener('click', () => {
+        vscode.postMessage({ type: 'fix-issues' });
+        fixBtn.disabled = true;
+        fixBtn.textContent = 'Fixing...';
+      });
+    }
+    
+    const refreshBtn = document.getElementById('refresh-btn');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', () => {
+        vscode.postMessage({ type: 'refresh' });
+      });
+    }
+  </script>
 </body>
 </html>`;
   }

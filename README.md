@@ -4,7 +4,9 @@
 
 Brainfile provides a visual kanban board interface for managing tasks defined in `brainfile.md` files using YAML frontmatter. Built on [@brainfile/core](https://www.npmjs.com/package/@brainfile/core) - the official Brainfile parser and serializer.
 
-![Brainfile VSCode Extension](https://raw.githubusercontent.com/brainfile/vscode/main/icon.png)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/brainfile/vscode/main/icon.png" alt="Brainfile Logo" width="128" height="128">
+</p>
 
 ## ✨ Features
 
@@ -56,44 +58,50 @@ columns:
 This is your task board.
 ```
 
-## 🎨 Creating Tasks from Templates
+## 🎨 Smart Autocomplete with Built-in Templates
+
+Brainfile provides intelligent IntelliSense autocomplete when editing `brainfile.md` files. No need for buttons or commands - just start typing!
 
 ### Built-in Templates
 
-**Bug Report** 🐛
-- Pre-configured with high priority
+When adding a new task in the `tasks:` array, trigger autocomplete to insert full task templates:
+
+**🐛 Bug Report**
+- High priority
 - Includes reproduction steps structure
 - Tags: bug, needs-triage
 
-**Feature Request** ✨
-- Pre-configured with medium priority  
+**✨ Feature Request**
+- Medium priority  
 - Includes use cases and acceptance criteria
 - Tags: feature, enhancement
 
-**Code Refactor** 🔧
-- Pre-configured with low priority
+**🔧 Code Refactor**
+- Low priority
 - Includes analysis and testing plan
 - Tags: refactor, technical-debt
 
 ### How to Use Templates
 
-**Via Command Palette:**
-1. Press `Ctrl+Shift+P` (or `Cmd+Shift+P` on Mac)
-2. Type "Brainfile: Create Task from Template"
-3. Select your template
-4. Fill in the details
-5. Choose the target column
+**While editing brainfile.md:**
+1. Navigate to a `tasks:` array in your YAML frontmatter
+2. Press `Ctrl+Space` (or your autocomplete trigger key)
+3. Select a template from the completion list (🐛 Bug Report, ✨ Feature Request, or 🔧 Code Refactor)
+4. Fill in the placeholder values using Tab to navigate
 
-**Via UI Button:**
-- Click "New from Template" in the Brainfile sidebar
-- Follow the prompts
+### Smart Field Completions
+
+Autocomplete also suggests:
+- **Field names**: `title`, `description`, `priority`, `tags`, `status`, etc.
+- **Priority values**: `critical`, `high`, `medium`, `low`
+- **Status values**: `todo`, `in-progress`, `done`, `blocked`
+- **Common fields** with snippets for quick navigation
 
 ## 🔧 Commands
 
 - **Brainfile: Refresh** - Manually refresh the task board
 - **Brainfile: Create Board** - Initialize a new brainfile.md
 - **Brainfile: Add Task** - Quick task creation
-- **Brainfile: Create Task from Template** - Create from built-in templates
 
 ## ⌨️ Keyboard Shortcuts
 

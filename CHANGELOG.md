@@ -5,6 +5,36 @@ All notable changes to the Brainfile VSCode extension will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2025-11-20
+
+### Added
+- **"Fix Issues" button** on error pages with integrated linter from @brainfile/core
+- Auto-fix capability for common YAML syntax errors
+- Preview changes before applying fixes (diff editor)
+- Detailed issue list showing fixable problems with line numbers
+- Refresh button on error pages
+- Better error messages with actionable guidance
+
+### Changed
+- Upgraded to @brainfile/core@^0.3.0 with integrated linter
+- Enhanced error page UI with modern styling
+- Improved parse error handling with lint diagnostics
+
+### Fixed
+- Parse errors now show specific issues and fix suggestions
+- Better error recovery with automatic consolidation of duplicate columns
+
+## [0.5.0] - 2024-12-01
+
+### Added
+- Stats configuration editor in Rules view
+- Support for configuring displayed columns in stats section
+- Visual column selector with max 4 columns
+
+### Changed
+- Improved Rules view with better organization
+- Updated to @brainfile/core with duplicate column consolidation
+
 ## [0.4.5] - 2024-11-20
 
 ### Changed
