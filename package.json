@@ -2,7 +2,7 @@
   "name": "brainfile",
   "displayName": "Brainfile",
   "description": "Protocol-first task management for AI-assisted development. Visual kanban board for brainfile.md files.",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "publisher": "brainfile",
   "license": "MIT",
   "icon": "icon.png",
@@ -56,6 +56,34 @@
         "command": "brainfile.addTask",
         "title": "Brainfile: Add Task",
         "icon": "$(add)"
+      },
+      {
+        "command": "brainfile.codelens.openBoard",
+        "title": "Brainfile: Open Board View"
+      },
+      {
+        "command": "brainfile.codelens.validate",
+        "title": "Brainfile: Validate Schema"
+      },
+      {
+        "command": "brainfile.codelens.addTaskToColumn",
+        "title": "Brainfile: Add Task to Column"
+      },
+      {
+        "command": "brainfile.codelens.archiveTask",
+        "title": "Brainfile: Archive Task"
+      },
+      {
+        "command": "brainfile.codelens.deleteTask",
+        "title": "Brainfile: Delete Task"
+      },
+      {
+        "command": "brainfile.codelens.moveTask",
+        "title": "Brainfile: Move Task"
+      },
+      {
+        "command": "brainfile.codelens.changePriority",
+        "title": "Brainfile: Change Priority"
       }
     ],
     "keybindings": [
@@ -97,6 +125,11 @@
     "configuration": {
       "title": "Brainfile",
       "properties": {
+        "brainfile.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show CodeLens inline actions above tasks in brainfile.md files"
+        },
         "brainfile.priorities.criticalColor": {
           "type": "string",
           "default": "#d64933",
@@ -157,7 +190,7 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "@brainfile/core": "file:../core",
+    "@brainfile/core": "^0.4.0",
     "@types/marked": "^5.0.2",
     "js-yaml": "^4.1.0",
     "marked": "^17.0.0"

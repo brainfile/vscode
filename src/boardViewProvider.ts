@@ -196,17 +196,19 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
         description: description?.trim() || "",
       });
 
-      // Save the updated board with debouncing
+      // Save the updated board
       const newContent = BrainfileSerializer.serialize(board);
-      this.debouncedWrite(newContent, () => {
-        log(`Quick added task ${newTaskId} to column ${columnId}`);
-        vscode.window.showInformationMessage(
-          `Added task "${title}" to ${column.title}`
-        );
-      });
+      fs.writeFileSync(this._boardFilePath, newContent, "utf8");
+      log(`Quick added task ${newTaskId} to column ${columnId}`);
+      vscode.window.showInformationMessage(
+        `Added task "${title}" to ${column.title}`
+      );
 
-      // Update the view
-      this.updateView();
+      // Update hash to prevent double update from file watcher
+      this._lastContentHash = this.hashContent(newContent);
+
+      // Update the view with the new content
+      this.updateView(false, newContent);
     }
   }
 
@@ -660,16 +662,22 @@ columns:
       });
 
       // On first load or forced refresh, set the full HTML
-      if (this._isFirstRender || forceFullRefresh) {
-        log("Setting initial HTML");
+      // DEBUG: Always do full refresh to diagnose postMessage issue
+      const shouldForceRefresh = true; // Set to false to use postMessage updates
+      if (this._isFirstRender || forceFullRefresh || shouldForceRefresh) {
+        log("Setting full HTML (firstRender:", this._isFirstRender, "forceRefresh:", forceFullRefresh, "debug:", shouldForceRefresh, ")");
         this._view.webview.html = this.getTasksHtml(board);
         this._isFirstRender = false;
       } else {
         // On subsequent updates, use postMessage to preserve state
-        log("Sending board update via postMessage");
+        log("Sending board update via postMessage, view visible:", this._view.visible);
         this._view.webview.postMessage({
           type: "boardUpdate",
           board: board,
+        }).then((success) => {
+          log("postMessage result:", success);
+        }, (err) => {
+          log("postMessage error:", err);
         });
       }
     } catch (error) {
@@ -699,13 +707,15 @@ columns:
           task.description = newDescription;
           const newContent = BrainfileSerializer.serialize(board);
 
-          // Use debounced write to prevent conflicts
-          this.debouncedWrite(newContent, () => {
-            log("Task updated successfully");
-          });
+          // Write synchronously for immediate UI update
+          fs.writeFileSync(this._boardFilePath, newContent, "utf8");
+          log("Task updated successfully");
 
-          // Immediately update the view
-          this.updateView();
+          // Update hash to prevent double update from file watcher
+          this._lastContentHash = this.hashContent(newContent);
+
+          // Immediately update the view with the new content
+          this.updateView(false, newContent);
           return;
         }
       }
@@ -752,21 +762,29 @@ columns:
     );
     const content = fs.readFileSync(this._boardFilePath, "utf8");
     const board = BrainfileParser.parse(content);
-    if (!board) return;
+    if (!board) {
+      log("Failed to parse board");
+      return;
+    }
 
     // Find source column and remove task
     let taskToMove = null;
     for (const col of board.columns) {
       if (col.id === fromColumnId) {
         const taskIndex = col.tasks.findIndex((t) => t.id === taskId);
+        log(`Looking for task ${taskId} in column ${col.id}, found at index: ${taskIndex}`);
         if (taskIndex !== -1) {
           taskToMove = col.tasks.splice(taskIndex, 1)[0];
+          log(`Task to move: ${taskToMove.id}, priority: ${taskToMove.priority}`);
           break;
         }
       }
     }
 
-    if (!taskToMove) return;
+    if (!taskToMove) {
+      log(`Task ${taskId} not found in column ${fromColumnId}`);
+      return;
+    }
 
     // Add to target column at specific index
     for (const col of board.columns) {
@@ -784,8 +802,8 @@ columns:
 
     log("Task moved successfully");
 
-    // Immediately update the view
-    this.updateView();
+    // Immediately update the view with the new content
+    this.updateView(false, newContent);
   }
 
   private handleUpdateTitle(newTitle: string) {
@@ -805,8 +823,8 @@ columns:
 
     log("Board title updated successfully");
 
-    // Immediately update the view
-    this.updateView();
+    // Immediately update the view with the new content
+    this.updateView(false, newContent);
   }
 
   private async handleEditTask(taskId: string) {
@@ -940,7 +958,7 @@ columns:
       this._lastContentHash = this.hashContent(newContent);
 
       log(`Updated priority for task ${taskId} to: ${newPriority || "none"}`);
-      this.updateView();
+      this.updateView(false, newContent);
     } catch (error) {
       log("Error updating priority:", error);
       vscode.window.showErrorMessage("Failed to update priority");
@@ -1138,8 +1156,8 @@ columns:
         "Stats configuration saved successfully"
       );
 
-      // Immediately update the view
-      this.updateView();
+      // Immediately update the view with the new content
+      this.updateView(false, newContent);
     } catch (error) {
       log("Error saving stats config:", error);
       vscode.window.showErrorMessage("Failed to save stats configuration");
@@ -1327,8 +1345,8 @@ columns:
         `Added task "${title}" to ${column.title}`
       );
 
-      // Update the view
-      this.updateView();
+      // Update the view with the new content
+      this.updateView(false, newContent);
     }
   }
 
@@ -1364,8 +1382,8 @@ columns:
             }`
           );
 
-          // Update the view
-          this.updateView();
+          // Update the view with the new content
+          this.updateView(false, newContent);
           return;
         }
       }
@@ -1431,8 +1449,8 @@ columns:
 
     log(`Added new ${ruleType} rule with id ${newRuleId}`);
 
-    // Update the view
-    this.updateView();
+    // Update the view with the new content
+    this.updateView(false, newContent);
   }
 
   private async handleEditRule(
@@ -1547,8 +1565,8 @@ columns:
 
       log(`Deleted ${ruleType} rule ${ruleId}`);
 
-      // Update the view
-      this.updateView();
+      // Update the view with the new content
+      this.updateView(false, newContent);
     }
   }
 
@@ -1624,17 +1642,8 @@ columns:
       `Task "${taskToArchive.title}" archived`
     );
 
-    // Force a full refresh with the updated archive
-    // Load the archive into the current board before updating
-    board.archive = archiveBoard.archive;
-
-    // Send update via postMessage for reactive update
-    if (this._view) {
-      this._view.webview.postMessage({
-        type: "boardUpdate",
-        board: board,
-      });
-    }
+    // Immediately update the view with the new content
+    this.updateView(false, newContent);
   }
 
   private createEmptyArchiveBoard(): Board {
@@ -3331,7 +3340,7 @@ columns:
     // Task expansion
     document.querySelectorAll('.task').forEach(taskEl => {
       taskEl.addEventListener('click', (e) => {
-        if (e.target.closest('.task-action') || e.target.closest('.drag-handle') || e.target.closest('.related-file') || e.target.closest('.subtask-item') || e.target.closest('.task-id')) {
+        if (e.target.closest('.task-action') || e.target.closest('.drag-handle') || e.target.closest('.related-file') || e.target.closest('.subtask-item') || e.target.closest('.task-id') || e.target.closest('.task-priority-label')) {
           return;
         }
         taskEl.classList.toggle('expanded');
@@ -3457,7 +3466,7 @@ columns:
         e.stopPropagation();
         const taskId = prioEl.dataset.taskId;
         vscode.postMessage({
-          command: 'editPriority',
+          type: 'editPriority',
           taskId: taskId
         });
       });
@@ -3493,6 +3502,7 @@ columns:
 
       task.addEventListener('drop', (e) => {
         e.preventDefault();
+        e.stopPropagation(); // Prevent column drop handler from also firing
         task.classList.remove('drag-over');
 
         if (!draggedTask || draggedTask === task) return;
@@ -3722,49 +3732,59 @@ columns:
     window.addEventListener('message', (event) => {
       const message = event.data;
 
-      if (message.type === 'boardUpdate') {
-        const newBoard = message.board;
-        const activeTab = document.querySelector('.tab.active').dataset.tab;
+      try {
+        if (message.type === 'boardUpdate') {
+          console.log('[Brainfile] Received boardUpdate message');
+          const newBoard = message.board;
+          const activeTabEl = document.querySelector('.tab.active');
+          const activeTab = activeTabEl ? activeTabEl.dataset.tab : 'tasks';
 
-        // Clear any parse warnings on successful update
-        const warningBanner = document.getElementById('parseWarningBanner');
-        if (warningBanner) {
-          warningBanner.remove();
+          // Clear any parse warnings on successful update
+          const warningBanner = document.getElementById('parseWarningBanner');
+          if (warningBanner) {
+            warningBanner.remove();
+          }
+
+          // Check what changed
+          const tasksChanged = JSON.stringify(newBoard.columns) !== JSON.stringify(previousBoard.columns);
+          const rulesChanged = JSON.stringify(newBoard.rules) !== JSON.stringify(previousBoard.rules);
+
+          // Update indicators if not on active tab
+          const tasksTabEl = document.querySelector('[data-tab="tasks"]');
+          const rulesTabEl = document.querySelector('[data-tab="rules"]');
+          if (activeTab !== 'tasks' && tasksChanged && tasksTabEl) {
+            tasksTabEl.classList.add('has-changes');
+          }
+          if (activeTab !== 'rules' && rulesChanged && rulesTabEl) {
+            rulesTabEl.classList.add('has-changes');
+          }
+
+          // Update the content
+          previousBoard = newBoard;
+
+          // Update title
+          const titleEl = document.getElementById('boardTitle');
+          if (titleEl && titleEl.textContent !== newBoard.title) {
+            titleEl.textContent = newBoard.title;
+          }
+
+          // Rebuild the tabs content (but don't switch tabs)
+          console.log('[Brainfile] Calling updateTabsContent');
+          updateTabsContent(newBoard, activeTab);
+          console.log('[Brainfile] updateTabsContent completed');
+        } else if (message.type === 'parseWarning') {
+          // Show warning banner if not already present
+          let warningBanner = document.getElementById('parseWarningBanner');
+          if (!warningBanner) {
+            warningBanner = document.createElement('div');
+            warningBanner.id = 'parseWarningBanner';
+            warningBanner.style.cssText = 'background: var(--vscode-inputValidation-warningBackground); color: var(--vscode-inputValidation-warningForeground); border: 1px solid var(--vscode-inputValidation-warningBorder); padding: 8px 12px; margin: 8px; border-radius: 4px; font-size: 12px;';
+            warningBanner.textContent = '⚠️ ' + message.message;
+            document.body.insertBefore(warningBanner, document.body.firstChild);
+          }
         }
-
-        // Check what changed
-        const tasksChanged = JSON.stringify(newBoard.columns) !== JSON.stringify(previousBoard.columns);
-        const rulesChanged = JSON.stringify(newBoard.rules) !== JSON.stringify(previousBoard.rules);
-
-        // Update indicators if not on active tab
-        if (activeTab !== 'tasks' && tasksChanged) {
-          document.querySelector('[data-tab="tasks"]').classList.add('has-changes');
-        }
-        if (activeTab !== 'rules' && rulesChanged) {
-          document.querySelector('[data-tab="rules"]').classList.add('has-changes');
-        }
-
-        // Update the content
-        previousBoard = newBoard;
-
-        // Update title
-        const titleEl = document.getElementById('boardTitle');
-        if (titleEl && titleEl.textContent !== newBoard.title) {
-          titleEl.textContent = newBoard.title;
-        }
-
-        // Rebuild the tabs content (but don't switch tabs)
-        updateTabsContent(newBoard, activeTab);
-      } else if (message.type === 'parseWarning') {
-        // Show warning banner if not already present
-        let warningBanner = document.getElementById('parseWarningBanner');
-        if (!warningBanner) {
-          warningBanner = document.createElement('div');
-          warningBanner.id = 'parseWarningBanner';
-          warningBanner.style.cssText = 'background: var(--vscode-inputValidation-warningBackground); color: var(--vscode-inputValidation-warningForeground); border: 1px solid var(--vscode-inputValidation-warningBorder); padding: 8px 12px; margin: 8px; border-radius: 4px; font-size: 12px;';
-          warningBanner.textContent = '⚠️ ' + message.message;
-          document.body.insertBefore(warningBanner, document.body.firstChild);
-        }
+      } catch (error) {
+        console.error('[Brainfile] Error handling message:', error);
       }
     });
 
@@ -3780,13 +3800,15 @@ columns:
     }
 
     function updateTabsContent(board, activeTab) {
-      // Store currently expanded tasks before updating
-      const expandedTasks = new Set();
-      document.querySelectorAll('.task.expanded').forEach(task => {
-        expandedTasks.add(task.dataset.taskId);
-      });
+      try {
+        console.log('[Brainfile] updateTabsContent starting, activeTab:', activeTab);
+        // Store currently expanded tasks before updating
+        const expandedTasks = new Set();
+        document.querySelectorAll('.task.expanded').forEach(task => {
+          expandedTasks.add(task.dataset.taskId);
+        });
 
-      // Store current search state before updating
+        // Store current search state before updating
       const currentSearchTerm = searchTerm;
 
       // Update tasks tab
@@ -3992,6 +4014,10 @@ columns:
           taskEl.classList.add('expanded');
         }
       });
+        console.log('[Brainfile] updateTabsContent completed successfully');
+      } catch (error) {
+        console.error('[Brainfile] Error in updateTabsContent:', error);
+      }
     }
 
     function calculateProgress(board) {
@@ -4091,7 +4117,7 @@ columns:
           e.stopPropagation();
           const taskId = prioEl.dataset.taskId;
           vscode.postMessage({
-            command: 'editPriority',
+            type: 'editPriority',
             taskId: taskId
           });
         });
@@ -4268,6 +4294,7 @@ columns:
 
         task.addEventListener('drop', (e) => {
           e.preventDefault();
+          e.stopPropagation(); // Prevent column drop handler from also firing
           task.classList.remove('drag-over');
 
           if (!draggedTask || draggedTask === task) return;
