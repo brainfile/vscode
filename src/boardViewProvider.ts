@@ -8,19 +8,36 @@ import {
   BrainfileSerializer,
   BrainfileLinter,
   Board,
-  Subtask,
   TaskTemplate,
   Task,
   BUILT_IN_TEMPLATES,
-  processTemplate,
-  generateTaskId,
-  LintResult
+  hashBoardContent
 } from "@brainfile/core";
 
-// Read package.json for version info
-const packageJson = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")
-);
+// Import modular board components
+import {
+  // Types
+  AgentType,
+  DetectedAgent,
+  // HTML utilities
+  escapeHtml,
+  getPriorityClassName,
+  getSubtaskProgress,
+  getCompletedSubtaskCount,
+  generateStatsHtml,
+  generateErrorHtml,
+  // Agent utilities
+  buildAgentPrompt,
+  // Board operations
+  updateTask,
+  deleteTask,
+  moveTask,
+  addTask,
+  updateBoardTitle,
+  toggleSubtask,
+  updateStatsConfig,
+  findColumnById,
+} from "./board";
 
 export class BoardViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "brainfile.tasksView";
@@ -38,8 +55,68 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
   private _pendingWrite?: { content: string; callback?: () => void };
   private _lastValidBoard?: Board;
   private _parseErrorCount: number = 0;
+  private _lastUsedAgent: AgentType = "copilot";
+  private _context?: vscode.ExtensionContext;
 
-  constructor(private readonly _extensionUri: vscode.Uri) {}
+  constructor(private readonly _extensionUri: vscode.Uri, context?: vscode.ExtensionContext) {
+    this._context = context;
+    // Load last-used agent from workspace state
+    if (context) {
+      const saved = context.workspaceState.get<AgentType>("brainfile.lastUsedAgent");
+      if (saved) {
+        this._lastUsedAgent = saved;
+      }
+    }
+  }
+
+  /**
+   * Check if running in Cursor IDE
+   */
+  private isCursorIDE(): boolean {
+    return vscode.env.appName.toLowerCase().includes("cursor");
+  }
+
+  /**
+   * Detect available AI agents in the current environment
+   */
+  private detectAvailableAgents(): DetectedAgent[] {
+    const agents: DetectedAgent[] = [];
+
+    // Check if running in Cursor
+    const isCursor = vscode.env.appName.toLowerCase().includes("cursor");
+    if (isCursor) {
+      agents.push({ type: "cursor", label: "Cursor", available: true });
+    }
+
+    // Check for Copilot Chat extension
+    const copilotExt = vscode.extensions.getExtension("github.copilot-chat");
+    if (copilotExt) {
+      agents.push({ type: "copilot", label: "Copilot", available: true });
+    }
+
+    // Check for Claude Code extension
+    const claudeExt = vscode.extensions.getExtension("anthropic.claude-code");
+    if (claudeExt) {
+      agents.push({ type: "claude-code", label: "Claude", available: true });
+    }
+
+    // Always add copy fallback
+    agents.push({ type: "copy", label: "Copy", available: true });
+
+    return agents;
+  }
+
+  /**
+   * Get the default agent (last used or first available)
+   */
+  private getDefaultAgent(): AgentType {
+    const agents = this.detectAvailableAgents();
+    const lastUsed = agents.find(a => a.type === this._lastUsedAgent && a.available);
+    if (lastUsed) return lastUsed.type;
+    // Return first available non-copy agent, or copy as last resort
+    const preferred = agents.find(a => a.type !== "copy" && a.available);
+    return preferred?.type || "copy";
+  }
 
   /**
    * Debounced write to prevent file conflicts when multiple agents/humans edit simultaneously
@@ -102,6 +179,24 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
 
   public refresh() {
     this.updateView();
+  }
+
+  /**
+   * Persist board changes to disk and refresh the view
+   * Common pattern for all board-mutating operations
+   */
+  private persistAndRefresh(board: Board, logMessage: string) {
+    if (!this._boardFilePath) return;
+
+    const newContent = BrainfileSerializer.serialize(board);
+    fs.writeFileSync(this._boardFilePath, newContent, "utf8");
+    log(logMessage);
+
+    // Update hash to prevent double update from file watcher
+    this._lastContentHash = this.hashContent(newContent);
+
+    // Immediately update the view with the new content
+    this.updateView(false, newContent);
   }
 
   public async createBoard() {
@@ -340,6 +435,20 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
         case "refresh":
           this.handleRefresh();
           break;
+        case "sendToAgent":
+          this.handleSendToAgent(data.taskId, data.agentType);
+          break;
+        case "getAvailableAgents":
+          // Send available agents to webview
+          const agents = this.detectAvailableAgents();
+          const defaultAgent = this.getDefaultAgent();
+          this._view?.webview.postMessage({
+            type: "agentsDetected",
+            agents,
+            defaultAgent,
+            lastUsed: this._lastUsedAgent
+          });
+          break;
       }
     });
   }
@@ -429,13 +538,14 @@ columns:
 
     this.disposeWatchers();
 
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
+    const boardUri = vscode.Uri.file(this._boardFilePath);
+    const boardFolder = vscode.workspace.getWorkspaceFolder(boardUri);
+    if (!boardFolder) {
       log("No workspace folder found for watcher");
       return;
     }
 
-    const rootPath = workspaceFolders[0].uri.fsPath;
+    const rootPath = boardFolder.uri.fsPath;
     const boardRelative = path.relative(rootPath, this._boardFilePath);
     const boardPattern = new vscode.RelativePattern(rootPath, boardRelative);
 
@@ -585,14 +695,7 @@ columns:
   }
 
   private hashContent(content: string): string {
-    // Simple hash function for change detection
-    let hash = 0;
-    for (let i = 0; i < content.length; i++) {
-      const char = content.charCodeAt(i);
-      hash = (hash << 5) - hash + char;
-      hash = hash & hash; // Convert to 32bit integer
-    }
-    return hash.toString(16);
+    return hashBoardContent(content);
   }
 
   private updateView(
@@ -630,21 +733,20 @@ columns:
 
         // If no valid board or too many consecutive errors, show error page with lint results
         const lintResult = BrainfileLinter.lint(content);
-        this._view.webview.html = this.getErrorHtml(
-          "Failed to parse brainfile.md",
-          "Check for YAML syntax errors in the frontmatter. Common issues:\n• Missing colons after keys\n• Incorrect indentation\n• Unclosed quotes or brackets",
-          lintResult
-        );
+        this._view.webview.html = generateErrorHtml({
+          message: "Failed to parse brainfile.md",
+          details: "Check for YAML syntax errors in the frontmatter. Common issues:\n• Missing colons after keys\n• Incorrect indentation\n• Unclosed quotes or brackets",
+          lintResult,
+        });
         return;
       }
 
-      // Successful parse - reset error count and save this board
+      // Successful parse - reset error count
       this._parseErrorCount = 0;
-      this._lastValidBoard = board;
-      this._lastContentHash = this.hashContent(content);
 
       // Load archive from separate file if it exists
       this.loadArchive(board);
+      const newHash = this.hashContent(content);
 
       log(
         "Board parsed successfully:",
@@ -662,10 +764,11 @@ columns:
       });
 
       // Always use full HTML refresh for reliable updates
-      // TODO: Investigate postMessage-based incremental updates for better state preservation
       log("Setting full HTML (firstRender:", this._isFirstRender, "forceRefresh:", forceFullRefresh, ")");
       this._view.webview.html = this.getTasksHtml(board);
       this._isFirstRender = false;
+      this._lastValidBoard = board;
+      this._lastContentHash = newHash;
     } catch (error) {
       log("Error updating view:", error);
       vscode.window.showErrorMessage("Failed to update Brainfile board view");
@@ -685,27 +788,13 @@ columns:
     const board = BrainfileParser.parse(content);
     if (!board) return;
 
-    for (const col of board.columns) {
-      if (col.id === columnId) {
-        const task = col.tasks.find((t) => t.id === taskId);
-        if (task) {
-          task.title = newTitle;
-          task.description = newDescription;
-          const newContent = BrainfileSerializer.serialize(board);
-
-          // Write synchronously for immediate UI update
-          fs.writeFileSync(this._boardFilePath, newContent, "utf8");
-          log("Task updated successfully");
-
-          // Update hash to prevent double update from file watcher
-          this._lastContentHash = this.hashContent(newContent);
-
-          // Immediately update the view with the new content
-          this.updateView(false, newContent);
-          return;
-        }
-      }
+    const result = updateTask(board, columnId, taskId, newTitle, newDescription);
+    if (!result.success || !result.board) {
+      log(`Failed to update task: ${result.error}`);
+      return;
     }
+
+    this.persistAndRefresh(result.board, "Task updated successfully");
   }
 
   private handleDeleteTask(columnId: string, taskId: string) {
@@ -716,23 +805,13 @@ columns:
     const board = BrainfileParser.parse(content);
     if (!board) return;
 
-    for (const col of board.columns) {
-      if (col.id === columnId) {
-        col.tasks = col.tasks.filter((t) => t.id !== taskId);
-        const newContent = BrainfileSerializer.serialize(board);
-
-        // Write synchronously like archive does to ensure immediate UI update
-        fs.writeFileSync(this._boardFilePath, newContent, "utf8");
-        log("Task deleted successfully");
-
-        // Update hash to prevent double update from file watcher
-        this._lastContentHash = this.hashContent(newContent);
-
-        // Immediately update the view with the new content
-        this.updateView(false, newContent);
-        return;
-      }
+    const result = deleteTask(board, columnId, taskId);
+    if (!result.success || !result.board) {
+      log(`Failed to delete task: ${result.error}`);
+      return;
     }
+
+    this.persistAndRefresh(result.board, "Task deleted successfully");
   }
 
   private handleMoveTask(
@@ -743,9 +822,7 @@ columns:
   ) {
     if (!this._boardFilePath) return;
 
-    log(
-      `Moving task ${taskId} from ${fromColumnId} to ${toColumnId} at index ${toIndex}`
-    );
+    log(`Moving task ${taskId} from ${fromColumnId} to ${toColumnId} at index ${toIndex}`);
     const content = fs.readFileSync(this._boardFilePath, "utf8");
     const board = BrainfileParser.parse(content);
     if (!board) {
@@ -753,43 +830,13 @@ columns:
       return;
     }
 
-    // Find source column and remove task
-    let taskToMove = null;
-    for (const col of board.columns) {
-      if (col.id === fromColumnId) {
-        const taskIndex = col.tasks.findIndex((t) => t.id === taskId);
-        log(`Looking for task ${taskId} in column ${col.id}, found at index: ${taskIndex}`);
-        if (taskIndex !== -1) {
-          taskToMove = col.tasks.splice(taskIndex, 1)[0];
-          log(`Task to move: ${taskToMove.id}, priority: ${taskToMove.priority}`);
-          break;
-        }
-      }
-    }
-
-    if (!taskToMove) {
-      log(`Task ${taskId} not found in column ${fromColumnId}`);
+    const result = moveTask(board, taskId, fromColumnId, toColumnId, toIndex);
+    if (!result.success || !result.board) {
+      log(`Failed to move task: ${result.error}`);
       return;
     }
 
-    // Add to target column at specific index
-    for (const col of board.columns) {
-      if (col.id === toColumnId) {
-        col.tasks.splice(toIndex, 0, taskToMove);
-        break;
-      }
-    }
-
-    const newContent = BrainfileSerializer.serialize(board);
-    fs.writeFileSync(this._boardFilePath, newContent, "utf8");
-
-    // Update hash to prevent double update
-    this._lastContentHash = this.hashContent(newContent);
-
-    log("Task moved successfully");
-
-    // Immediately update the view with the new content
-    this.updateView(false, newContent);
+    this.persistAndRefresh(result.board, "Task moved successfully");
   }
 
   private handleUpdateTitle(newTitle: string) {
@@ -800,17 +847,13 @@ columns:
     const board = BrainfileParser.parse(content);
     if (!board) return;
 
-    board.title = newTitle;
-    const newContent = BrainfileSerializer.serialize(board);
-    fs.writeFileSync(this._boardFilePath, newContent, "utf8");
+    const result = updateBoardTitle(board, newTitle);
+    if (!result.success || !result.board) {
+      log(`Failed to update title: ${result.error}`);
+      return;
+    }
 
-    // Update hash to prevent double update
-    this._lastContentHash = this.hashContent(newContent);
-
-    log("Board title updated successfully");
-
-    // Immediately update the view with the new content
-    this.updateView(false, newContent);
+    this.persistAndRefresh(result.board, "Board title updated successfully");
   }
 
   private async handleEditTask(taskId: string) {
@@ -948,6 +991,98 @@ columns:
     } catch (error) {
       log("Error updating priority:", error);
       vscode.window.showErrorMessage("Failed to update priority");
+    }
+  }
+
+  private async handleSendToAgent(taskId: string, agentType?: AgentType) {
+    if (!this._boardFilePath) {
+      vscode.window.showErrorMessage("No Brainfile board found");
+      return;
+    }
+
+    try {
+      const content = fs.readFileSync(this._boardFilePath, "utf8");
+      const board = BrainfileParser.parse(content);
+      if (!board) {
+        vscode.window.showErrorMessage("Failed to parse board");
+        return;
+      }
+
+      // Find task and column
+      let targetTask: Task | undefined;
+      let columnTitle = "";
+      for (const col of board.columns) {
+        const found = col.tasks.find((t) => t.id === taskId);
+        if (found) {
+          targetTask = found;
+          columnTitle = col.title;
+          break;
+        }
+      }
+
+      if (!targetTask) {
+        vscode.window.showErrorMessage(`Task ${taskId} not found`);
+        return;
+      }
+
+      const prompt = buildAgentPrompt({
+        boardTitle: board.title,
+        columnTitle,
+        task: targetTask,
+      });
+
+      // Use provided agent or default
+      const agent = agentType || this.getDefaultAgent();
+      this._lastUsedAgent = agent;
+
+      // Persist to workspace state
+      if (this._context) {
+        this._context.workspaceState.update("brainfile.lastUsedAgent", agent);
+      }
+
+      await this.sendToAgent(agent, prompt);
+    } catch (error) {
+      log("Error sending to agent:", error);
+      vscode.window.showErrorMessage("Failed to build agent prompt.");
+    }
+  }
+
+  /**
+   * Send prompt to the specified agent
+   */
+  private async sendToAgent(agent: AgentType, prompt: string): Promise<void> {
+    switch (agent) {
+      case "copilot":
+      case "cursor":
+        // Use workbench.action.chat.open with prompt directly
+        try {
+          await vscode.commands.executeCommand("workbench.action.chat.open", prompt);
+        } catch (err) {
+          // Fallback to clipboard if command fails
+          await vscode.env.clipboard.writeText(prompt);
+          vscode.window.showInformationMessage("Prompt copied. Paste into chat.");
+        }
+        break;
+
+      case "claude-code":
+        // Open terminal and run claude CLI
+        const escapedPrompt = prompt.replace(/"/g, '\\"').replace(/\n/g, '\\n');
+        const terminal = vscode.window.createTerminal("Claude Code");
+        terminal.show();
+        terminal.sendText(`claude "${escapedPrompt}"`);
+        break;
+
+      case "copy":
+      default:
+        // Copy to clipboard and show in document
+        await vscode.env.clipboard.writeText(prompt);
+        const doc = await vscode.workspace.openTextDocument({
+          content: prompt,
+          language: "markdown",
+        });
+        await vscode.window.showTextDocument(doc, { preview: true });
+        vscode.window.showInformationMessage("Prompt copied to clipboard.");
+        break;
     }
   }
 
@@ -1119,31 +1254,23 @@ columns:
       const board = BrainfileParser.parse(content);
       if (!board) return;
 
-      // Update or create statsConfig
+      // Handle empty columns (remove config) or use updateStatsConfig
+      let updatedBoard: Board;
       if (columns.length > 0) {
-        board.statsConfig = {
-          columns: columns.slice(0, 4), // Max 4 columns
-        };
+        const result = updateStatsConfig(board, columns.slice(0, 4));
+        if (!result.success || !result.board) {
+          log(`Failed to update stats config: ${result.error}`);
+          return;
+        }
+        updatedBoard = result.board;
       } else {
         // Remove statsConfig if no columns selected (use default)
-        delete board.statsConfig;
+        updatedBoard = { ...board };
+        delete updatedBoard.statsConfig;
       }
 
-      const newContent = BrainfileSerializer.serialize(board);
-      fs.writeFileSync(this._boardFilePath, newContent, "utf8");
-
-      // Update hash to prevent double update
-      this._lastContentHash = this.hashContent(newContent);
-
-      log("Stats config saved successfully");
-
-      // Show success message
-      vscode.window.showInformationMessage(
-        "Stats configuration saved successfully"
-      );
-
-      // Immediately update the view with the new content
-      this.updateView(false, newContent);
+      this.persistAndRefresh(updatedBoard, "Stats config saved successfully");
+      vscode.window.showInformationMessage("Stats configuration saved successfully");
     } catch (error) {
       log("Error saving stats config:", error);
       vscode.window.showErrorMessage("Failed to save stats configuration");
@@ -1303,37 +1430,18 @@ columns:
     const board = BrainfileParser.parse(content);
     if (!board) return;
 
-    // Generate next task ID
-    const allTaskIds = board.columns.flatMap((col) =>
-      col.tasks.map((t) => parseInt(t.id.replace("task-", "")) || 0)
-    );
-    const maxId = Math.max(0, ...allTaskIds);
-    const newTaskId = `task-${maxId + 1}`;
-
-    // Add task to the specified column
-    const column = board.columns.find((col) => col.id === columnId);
-    if (column) {
-      column.tasks.push({
-        id: newTaskId,
-        title: title.trim(),
-        description: description?.trim() || "",
-      });
-
-      // Save the updated board
-      const newContent = BrainfileSerializer.serialize(board);
-      fs.writeFileSync(this._boardFilePath, newContent, "utf8");
-
-      // Update hash to prevent double update
-      this._lastContentHash = this.hashContent(newContent);
-
-      log(`Added task ${newTaskId} to column ${columnId}`);
-      vscode.window.showInformationMessage(
-        `Added task "${title}" to ${column.title}`
-      );
-
-      // Update the view with the new content
-      this.updateView(false, newContent);
+    // Use addTask from boardOperations (handles ID generation)
+    const result = addTask(board, columnId, title, description || "");
+    if (!result.success || !result.board) {
+      log(`Failed to add task: ${result.error}`);
+      return;
     }
+
+    const column = findColumnById(board, columnId);
+    const columnTitle = column?.title || columnId;
+
+    this.persistAndRefresh(result.board, `Added task to column ${columnId}`);
+    vscode.window.showInformationMessage(`Added task "${title}" to ${columnTitle}`);
   }
 
   private handleToggleSubtask(taskId: string, subtaskId: string) {
@@ -1341,39 +1449,17 @@ columns:
 
     log(`Toggling subtask ${subtaskId} for task ${taskId}`);
 
-    // Read current board
     const content = fs.readFileSync(this._boardFilePath, "utf8");
     const board = BrainfileParser.parse(content);
     if (!board) return;
 
-    // Find the task and subtask
-    for (const col of board.columns) {
-      const task = col.tasks.find((t) => t.id === taskId);
-      if (task && task.subtasks) {
-        const subtask = task.subtasks.find((st) => st.id === subtaskId);
-        if (subtask) {
-          // Toggle the completed state
-          subtask.completed = !subtask.completed;
-
-          // Save the updated board
-          const newContent = BrainfileSerializer.serialize(board);
-          fs.writeFileSync(this._boardFilePath, newContent, "utf8");
-
-          // Update hash to prevent double update
-          this._lastContentHash = this.hashContent(newContent);
-
-          log(
-            `Subtask ${subtaskId} toggled to ${
-              subtask.completed ? "completed" : "incomplete"
-            }`
-          );
-
-          // Update the view with the new content
-          this.updateView(false, newContent);
-          return;
-        }
-      }
+    const result = toggleSubtask(board, taskId, subtaskId);
+    if (!result.success || !result.board) {
+      log(`Failed to toggle subtask: ${result.error}`);
+      return;
     }
+
+    this.persistAndRefresh(result.board, `Subtask ${subtaskId} toggled`);
   }
 
   private async handleAddRule(
@@ -1650,10 +1736,6 @@ columns:
     return text;
   }
 
-  private getPriorityClassName(priority: string): string {
-    return `priority-${priority.toLowerCase().replace(/[^a-z0-9]/g, "-")}`;
-  }
-
   private getDynamicPriorityCSS(): string {
     const config = vscode.workspace.getConfiguration("brainfile.priorities");
 
@@ -1678,59 +1760,12 @@ columns:
 
     // Custom priorities
     for (const [priority, color] of Object.entries(customPriorities)) {
-      const className = this.getPriorityClassName(priority);
+      const className = getPriorityClassName(priority);
       css += `    .task.${className} { border-left-color: ${color}; }\n`;
       css += `    .task-priority-label.${className} { color: ${color}; }\n`;
     }
 
     return css;
-  }
-
-  private getSubtaskProgress(subtasks: Subtask[]): number {
-    if (!subtasks || subtasks.length === 0) return 0;
-    const completed = subtasks.filter((st) => st.completed).length;
-    return Math.round((completed / subtasks.length) * 100);
-  }
-
-  private getCompletedSubtaskCount(subtasks: Subtask[]): number {
-    if (!subtasks) return 0;
-    return subtasks.filter((st) => st.completed).length;
-  }
-
-  private getStatsHtml(board: Board, totalTasks: number): string {
-    // Check if custom stat columns are configured
-    if (board.statsConfig?.columns && board.statsConfig.columns.length > 0) {
-      // Use configured columns (max 4)
-      const statColumns = board.statsConfig.columns.slice(0, 4);
-      return statColumns
-        .map((columnId) => {
-          const column = board.columns.find((col) => col.id === columnId);
-          if (column) {
-            return `
-            <div class="stat">
-              <div class="stat-value">${column.tasks.length}</div>
-              <div class="stat-label">${this.escapeHtml(column.title)}</div>
-            </div>
-          `;
-          }
-          return "";
-        })
-        .join("");
-    } else {
-      // Default: Total and Done
-      const doneColumn = board.columns.find((col) => col.id === "done");
-      const doneTasks = doneColumn ? doneColumn.tasks.length : 0;
-      return `
-        <div class="stat">
-          <div class="stat-value">${totalTasks}</div>
-          <div class="stat-label">Total</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value">${doneTasks}</div>
-          <div class="stat-label">Done</div>
-        </div>
-      `;
-    }
   }
 
   private getTasksHtml(board: Board): string {
@@ -1773,6 +1808,11 @@ columns:
     // Generate nonce for CSP
     const nonce = this.getNonce();
 
+    // Get URI for external stylesheet
+    const styleUri = this._view?.webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'media', 'board.css')
+    );
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1782,1121 +1822,18 @@ columns:
     this._view?.webview.cspSource
   } 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <title>Brainfile Tasks</title>
+  <link rel="stylesheet" href="${styleUri}">
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      background: var(--vscode-sideBar-background);
-      color: var(--vscode-sideBar-foreground);
-      font-family: var(--vscode-font-family);
-      font-size: var(--vscode-font-size);
-      line-height: 1.5;
-      -webkit-font-smoothing: antialiased;
-      -moz-osx-font-smoothing: grayscale;
-    }
-
-    .board-header {
-      padding: 16px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-      background: var(--vscode-sideBarSectionHeader-background);
-    }
-
-    .header-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
-      padding: 0 4px;
-      position: relative;
-    }
-
-    /* Search Section Styles */
-    .search-section {
-      padding: 16px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-      background: var(--vscode-sideBarSectionHeader-background);
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-
-    .search-container {
-      position: relative;
-      flex: 1;
-    }
-
-    .template-button {
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-      border: none;
-      border-radius: 2px;
-      padding: 6px 12px;
-      font-size: 12px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      white-space: nowrap;
-      transition: background 0.2s;
-    }
-
-    .template-button:hover {
-      background: var(--vscode-button-hoverBackground);
-    }
-
-    .template-icon {
-      font-size: 14px;
-    }
-
-    .search-input {
-      width: 100%;
-      padding: 6px 32px 6px 10px;
-      background: var(--vscode-editor-background);
-      border: 1px solid var(--vscode-input-border);
-      border-radius: 4px;
-      color: var(--vscode-input-foreground);
-      font-size: 12px;
-      font-family: var(--vscode-font-family);
-      outline: none;
-      transition: border-color 0.2s;
-    }
-
-    .search-input:focus {
-      border-color: var(--vscode-focusBorder);
-    }
-
-    .search-input::placeholder {
-      color: var(--vscode-input-placeholderForeground);
-      opacity: 0.8;
-    }
-
-    .search-clear {
-      position: absolute;
-      right: 8px;
-      top: 50%;
-      transform: translateY(-50%);
-      background: transparent;
-      border: none;
-      color: var(--vscode-descriptionForeground);
-      cursor: pointer;
-      padding: 4px;
-      font-size: 14px;
-      opacity: 0.6;
-      transition: opacity 0.2s;
-    }
-
-    .search-clear:hover {
-      opacity: 1;
-    }
-
-
-    /* Hidden task state for filtering */
-    .task.filtered-out {
-      display: none !important;
-    }
-
-    .column-section.all-filtered .empty-state {
-      display: block !important;
-    }
-
-    .column-section.all-filtered .empty-state::after {
-      content: " (filtered)";
-      opacity: 0.6;
-    }
-
-    /* Task metadata styles - minimal */
-    .task-metadata {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 4px;
-      margin-top: 6px;
-      padding-left: 20px;
-      font-size: 10px;
-    }
-
-    .task-tag {
-      color: var(--vscode-descriptionForeground);
-      opacity: 0.6;
-    }
-
-    .task-tag::before {
-      content: '·';
-      margin-right: 4px;
-      opacity: 0.4;
-    }
-
-    .task-tag:first-child::before {
-      content: none;
-      margin-right: 0;
-    }
-
-    .task-assignee {
-      color: var(--vscode-descriptionForeground);
-      opacity: 0.7;
-    }
-
-    .task-assignee::before {
-      content: '@';
-      opacity: 0.5;
-    }
-
-    .board-title-wrapper {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex: 1;
-    }
-
-    .board-title {
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.95;
-      letter-spacing: -0.01em;
-      cursor: pointer;
-      padding: 4px 6px;
-      border-radius: 4px;
-      transition: background 0.15s;
-    }
-
-    .board-title:hover {
-      background: var(--vscode-toolbar-hoverBackground);
-    }
-
-    .title-edit-btn {
-      background: transparent;
-      border: none;
-      color: var(--vscode-descriptionForeground);
-      cursor: pointer;
-      padding: 2px 4px;
-      border-radius: 3px;
-      font-size: 12px;
-      opacity: 0;
-      transition: opacity 0.15s;
-    }
-
-    .header-top:hover .title-edit-btn {
-      opacity: 0.7;
-    }
-
-    .title-edit-btn:hover {
-      opacity: 1 !important;
-      background: var(--vscode-toolbar-hoverBackground);
-    }
-
-    .tabs {
-      display: flex;
-      gap: 4px;
-      margin-bottom: 12px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-    }
-
-    .tab {
-      background: transparent;
-      border: none;
-      padding: 8px 12px;
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--vscode-descriptionForeground);
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      transition: all 0.15s;
-      letter-spacing: -0.01em;
-      position: relative;
-    }
-
-    .tab:hover {
-      color: var(--vscode-foreground);
-      background: var(--vscode-toolbar-hoverBackground);
-    }
-
-    .tab.active {
-      color: var(--vscode-editor-foreground);
-      border-bottom-color: var(--vscode-focusBorder);
-      opacity: 0.95;
-    }
-
-    .settings-gear {
-      margin-left: auto;
-      background: transparent;
-      border: none;
-      padding: 6px 10px;
-      font-size: 14px;
-      color: var(--vscode-descriptionForeground);
-      cursor: pointer;
-      border-radius: 4px;
-      transition: all 0.15s;
-      opacity: 0.6;
-    }
-
-    .settings-gear:hover {
-      opacity: 1;
-      background: var(--vscode-toolbar-hoverBackground);
-      color: var(--vscode-foreground);
-    }
-
-    .tab-indicator {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #4ade80;
-      position: absolute;
-      top: 6px;
-      right: 6px;
-      opacity: 0;
-      transition: opacity 0.2s;
-    }
-
-    .tab.has-changes .tab-indicator {
-      opacity: 1;
-    }
-
-    .tab-content {
-      display: none;
-    }
-
-    .tab-content.active {
-      display: block;
-    }
-
-    .progress-section {
-      margin-top: 8px;
-    }
-
-    .progress-label {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 11px;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.7;
-      margin-bottom: 6px;
-    }
-
-    .progress-percent {
-      font-family: 'JetBrains Mono', monospace;
-      font-weight: 600;
-      font-size: 13px;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.95;
-    }
-
-    .progress-bar {
-      height: 6px;
-      background: var(--vscode-input-background);
-      border-radius: 3px;
-      overflow: hidden;
-    }
-
-    .progress-fill {
-      height: 100%;
-      background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-      transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      border-radius: 3px;
-    }
-
-    .stats {
-      display: flex;
-      gap: 12px;
-      margin-top: 12px;
-    }
-
-    .stat {
-      flex: 1;
-      padding: 8px;
-      background: var(--vscode-input-background);
-      border-radius: 6px;
-      border: 1px solid var(--vscode-panel-border);
-    }
-
-    .stat-value {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 20px;
-      font-weight: 600;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.95;
-    }
-
-    .stat-label {
-      font-size: 10px;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.6;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-top: 2px;
-    }
-
-    .column-section {
-      border-bottom: 1px solid var(--vscode-panel-border);
-    }
-
-    .column-section.collapsed .task {
-      display: none;
-    }
-
-    .column-section.collapsed .empty-state {
-      display: none;
-    }
-
-    .column-header {
-      padding: 10px 16px;
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      background: var(--vscode-sideBarSectionHeader-background);
-      color: var(--vscode-editor-foreground);
-      opacity: 0.9;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      letter-spacing: 0.5px;
-      cursor: pointer;
-      user-select: none;
-      transition: background 0.15s;
-    }
-
-    .column-header:hover {
-      background: var(--vscode-list-hoverBackground);
-    }
-
-    .column-header-title {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .column-header-right {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .add-task-btn {
-      background: transparent;
-      border: none;
-      color: var(--vscode-editor-foreground);
-      opacity: 0;
-      cursor: pointer;
-      padding: 2px 4px;
-      border-radius: 3px;
-      font-size: 14px;
-      transition: opacity 0.15s;
-    }
-
-    .column-header:hover .add-task-btn {
-      opacity: 0.6;
-    }
-
-    .add-task-btn:hover {
-      opacity: 1 !important;
-      background: var(--vscode-toolbar-hoverBackground);
-    }
-
-    .collapse-icon {
-      font-size: 10px;
-      opacity: 0.7;
-      transition: transform 0.2s;
-    }
-
-    .column-section.collapsed .collapse-icon {
-      transform: rotate(-90deg);
-    }
-
-    .task-count {
-      font-size: 11px;
-      opacity: 0.8;
-      font-family: 'JetBrains Mono', monospace;
-    }
-
-    .task {
-      padding: 10px 16px;
-      border-left: 3px solid transparent;
-      cursor: pointer;
-      transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-      position: relative;
-    }
-
-    /* Priority as left border - intensity based */
-    .task.priority-critical { border-left-color: #ffffff; }
-    .task.priority-high { border-left-color: rgba(255, 255, 255, 0.7); }
-    .task.priority-medium { border-left-color: rgba(255, 255, 255, 0.4); }
-    .task.priority-low { border-left-color: rgba(255, 255, 255, 0.15); }
-    .task.priority-unknown { border-left-color: rgba(255, 255, 255, 0.3); }
-
-    .task:hover {
-      background: var(--vscode-list-hoverBackground);
-    }
-
-    .task.expanded {
-      background: var(--vscode-list-inactiveSelectionBackground);
-    }
-
-    .task.dragging {
-      opacity: 0.5;
-    }
-
-    .task.drag-over {
-      border-top: 2px solid var(--vscode-list-activeSelectionBackground);
-    }
-
-    .task-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .drag-handle {
-      cursor: grab;
-      color: var(--vscode-descriptionForeground);
-      opacity: 0;
-      transition: opacity 0.15s;
-      font-size: 12px;
-    }
-
-    .task:hover .drag-handle {
-      opacity: 0.5;
-    }
-
-    .drag-handle:hover {
-      opacity: 1 !important;
-    }
-
-    .task-title {
-      flex: 1;
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.95;
-      letter-spacing: -0.01em;
-    }
-
-    .task-actions {
-      display: flex;
-      gap: 4px;
-      opacity: 0;
-      transition: opacity 0.15s;
-    }
-
-    .task:hover .task-actions {
-      opacity: 1;
-    }
-
-    .task-action {
-      padding: 4px 6px;
-      border-radius: 4px;
-      font-size: 11px;
-      cursor: pointer;
-      color: var(--vscode-descriptionForeground);
-      transition: all 0.15s;
-      border: none;
-      background: transparent;
-    }
-
-    .task-action:hover {
-      background: var(--vscode-button-hoverBackground);
-      color: var(--vscode-button-foreground);
-    }
-
-    .task-action.delete:hover {
-      background: var(--vscode-inputValidation-errorBackground);
-      color: var(--vscode-inputValidation-errorForeground);
-    }
-
-    .task-action.complete:hover {
-      background: var(--vscode-testing-iconPassed);
-      color: var(--vscode-button-foreground);
-    }
-
-    .task-id {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10px;
-      color: var(--vscode-descriptionForeground);
-      opacity: 0.4;
-      padding: 2px 6px;
-      cursor: pointer;
-      border-radius: 3px;
-      transition: all 0.15s;
-      white-space: nowrap;
-    }
-
-    .task-id:hover {
-      opacity: 1;
-      background: var(--vscode-button-secondaryBackground);
-      color: var(--vscode-button-secondaryForeground);
-    }
-
-    /* Priority label in metadata row */
-    .task-priority-label {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.05em;
-      cursor: pointer;
-      border-radius: 3px;
-      transition: all 0.15s;
-      color: var(--vscode-descriptionForeground);
-      opacity: 0.5;
-    }
-
-    .task-priority-label::after {
-      content: '·';
-      margin-left: 6px;
-      opacity: 0.4;
-      font-weight: normal;
-    }
-
-    .task-priority-label:hover {
-      opacity: 1;
-    }
-
-    /* Priority colors - intensity based */
-    .task-priority-label.priority-critical { color: #ffffff; opacity: 1; }
-    .task-priority-label.priority-high { color: rgba(255, 255, 255, 0.9); opacity: 0.85; }
-    .task-priority-label.priority-medium { color: rgba(255, 255, 255, 0.7); opacity: 0.65; }
-    .task-priority-label.priority-low { color: rgba(255, 255, 255, 0.5); opacity: 0.45; }
-    .task-priority-label.priority-critical:hover,
-    .task-priority-label.priority-high:hover,
-    .task-priority-label.priority-medium:hover,
-    .task-priority-label.priority-low:hover {
-      opacity: 1;
-      background: var(--vscode-button-secondaryBackground);
-      color: var(--vscode-button-secondaryForeground);
-    }
-
+    /* Dynamic priority colors from settings */
     ${this.getDynamicPriorityCSS()}
 
-    /* Toast notification */
-    .toast {
-      position: fixed;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%) translateY(100px);
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-      padding: 8px 16px;
-      border-radius: 4px;
-      font-size: 12px;
-      opacity: 0;
-      transition: all 0.3s ease;
-      z-index: 1000;
-      pointer-events: none;
-    }
-
-    .toast.show {
-      transform: translateX(-50%) translateY(0);
-      opacity: 1;
-    }
-
-    .task-description {
-      font-size: 11px;
-      color: var(--vscode-descriptionForeground);
-      line-height: 1.5;
-      margin-top: 6px;
-      padding-left: 20px;
-      display: none;
-    }
-
-    .task.expanded .task-description {
-      display: block;
-    }
-
-    /* Subtasks styling */
-    .subtasks-container {
-      margin-top: 8px;
-      padding-left: 20px;
-      display: none;
-    }
-
-    .task.expanded .subtasks-container {
-      display: block;
-    }
-
-    .subtask-progress {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 8px;
-      font-size: 10px;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .subtask-progress-bar {
-      flex: 1;
-      height: 4px;
-      background: var(--vscode-input-background);
-      border-radius: 2px;
-      overflow: hidden;
-    }
-
-    .subtask-progress-fill {
-      height: 100%;
-      background: var(--vscode-progressBar-background);
-      transition: width 0.3s ease;
-    }
-
-    .subtask-count {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10px;
-      opacity: 0.8;
-    }
-
-    .subtask-list {
-      list-style: none;
-      padding: 0;
-      margin: 0;
-    }
-
-    .subtask-item {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 3px 0;
-      font-size: 11px;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.9;
-    }
-
-    .subtask-checkbox {
-      width: 12px;
-      height: 12px;
-      border: 1px solid var(--vscode-input-border);
-      border-radius: 2px;
-      background: var(--vscode-input-background);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-
-    .subtask-item.completed .subtask-checkbox {
-      background: var(--vscode-button-background);
-      border-color: var(--vscode-button-background);
-    }
-
-    .subtask-item.completed .subtask-checkbox::after {
-      content: '✓';
-      color: var(--vscode-button-foreground);
-      font-size: 9px;
-    }
-
-    .subtask-item.completed .subtask-title {
-      text-decoration: line-through;
-      opacity: 0.6;
-    }
-
-    /* Markdown styling in task descriptions */
-    .task-description p {
-      margin: 4px 0;
-    }
-
-    .task-description code {
-      background: var(--vscode-textCodeBlock-background);
-      padding: 2px 4px;
-      border-radius: 3px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10px;
-    }
-
-    .task-description pre {
-      background: var(--vscode-textCodeBlock-background);
-      padding: 8px;
-      border-radius: 4px;
-      overflow-x: auto;
-      margin: 6px 0;
-    }
-
-    .task-description pre code {
-      background: transparent;
-      padding: 0;
-    }
-
-    .task-description ul, .task-description ol {
-      margin: 4px 0;
-      padding-left: 20px;
-    }
-
-    .task-description li {
-      margin: 2px 0;
-    }
-
-    .task-description strong {
-      font-weight: 600;
-      color: var(--vscode-editor-foreground);
-    }
-
-    .task-description em {
-      font-style: italic;
-    }
-
-    .task-description a {
-      color: var(--vscode-textLink-foreground);
-      text-decoration: none;
-    }
-
-    .task-description a:hover {
-      text-decoration: underline;
-    }
-
-    .task-related-files {
-      margin-top: 8px;
-      padding-left: 20px;
-      display: none;
-    }
-
-    .task.expanded .task-related-files {
-      display: block;
-    }
-
-    .related-file {
-      font-size: 10px;
-      color: var(--vscode-textLink-foreground);
-      padding: 4px 6px;
-      margin: 2px 0;
-      background: var(--vscode-input-background);
-      border-radius: 3px;
-      cursor: pointer;
-      transition: background 0.15s;
-      font-family: 'JetBrains Mono', monospace;
-    }
-
-    .related-file:hover {
-      background: var(--vscode-list-hoverBackground);
-    }
-
-    .edit-modal {
-      display: none;
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0, 0, 0, 0.8);
-      align-items: center;
-      justify-content: center;
-      z-index: 1000;
-    }
-
-    .edit-modal.show {
-      display: flex;
-    }
-
-    .edit-modal-content {
-      background: var(--vscode-editorWidget-background);
-      border: 1px solid var(--vscode-panel-border);
-      border-radius: 8px;
-      padding: 16px;
-      width: 90%;
-      max-width: 400px;
-    }
-
-    .edit-modal-title {
-      font-size: 13px;
-      font-weight: 600;
-      margin-bottom: 12px;
-      color: var(--vscode-foreground);
-    }
-
-    .edit-input {
-      width: 100%;
-      background: var(--vscode-input-background);
-      border: 1px solid var(--vscode-input-border);
-      border-radius: 4px;
-      padding: 8px;
-      margin-bottom: 8px;
-      color: var(--vscode-input-foreground);
-      font-family: var(--vscode-font-family);
-      font-size: 12px;
-    }
-
-    .edit-input:focus {
-      outline: none;
-      border-color: var(--vscode-focusBorder);
-    }
-
-    .edit-textarea {
-      resize: vertical;
-      min-height: 80px;
-      font-family: var(--vscode-font-family);
-    }
-
-    .edit-actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 12px;
-      justify-content: flex-end;
-    }
-
-    .edit-button {
-      padding: 6px 12px;
-      border-radius: 4px;
-      border: none;
-      font-size: 11px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-
-    .edit-button.primary {
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-    }
-
-    .edit-button.primary:hover {
-      background: var(--vscode-button-hoverBackground);
-    }
-
-    .edit-button.secondary {
-      background: var(--vscode-button-secondaryBackground);
-      color: var(--vscode-button-secondaryForeground);
-    }
-
-    .edit-button.secondary:hover {
-      background: var(--vscode-button-secondaryHoverBackground);
-    }
-
-    .empty-state {
-      font-size: 11px;
-      color: var(--vscode-descriptionForeground);
-      padding: 16px;
-      font-style: italic;
-      opacity: 0.7;
-      text-align: center;
-    }
-
-    .rules-view {
-      padding: 0;
-    }
-
-    .rules-category {
-      border-bottom: 1px solid var(--vscode-panel-border);
-      padding: 16px;
-    }
-
-    .rules-category-title {
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.7;
-      margin-bottom: 12px;
-      letter-spacing: 0.5px;
-    }
-
-    .rule-item-full {
-      padding: 8px 0;
-      border-bottom: 1px solid var(--vscode-panel-border);
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-    }
-
-    .rule-item-full:last-child {
-      border-bottom: none;
-    }
-
-    .rule-number {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.7;
-      min-width: 20px;
-      flex-shrink: 0;
-      margin-top: 2px;
-    }
-
-    .rule-icon {
-      font-size: 14px;
-      margin-top: 2px;
-      flex-shrink: 0;
-    }
-
-    .rule-text {
-      font-size: 12px;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.9;
-      line-height: 1.5;
-      letter-spacing: -0.01em;
-      flex: 1;
-    }
-
-    .rules-category-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
-      padding: 4px;
-      border-radius: 4px;
-      cursor: pointer;
-      user-select: none;
-      transition: background 0.15s;
-    }
-
-    .rules-category-header:hover {
-      background: var(--vscode-list-hoverBackground);
-    }
-
-    .add-rule-btn {
-      background: transparent;
-      color: var(--vscode-editor-foreground);
-      border: none;
-      border-radius: 3px;
-      padding: 2px 4px;
-      cursor: pointer;
-      font-size: 14px;
-      opacity: 0;
-      transition: opacity 0.15s;
-    }
-
-    .rules-category-header:hover .add-rule-btn {
-      opacity: 0.6;
-    }
-
-    .add-rule-btn:hover {
-      opacity: 1 !important;
-      background: var(--vscode-toolbar-hoverBackground);
-    }
-
-    .rule-actions {
-      display: flex;
-      gap: 4px;
-      opacity: 0;
-      transition: opacity 0.15s;
-    }
-
-    .rule-item-full:hover .rule-actions {
-      opacity: 1;
-    }
-
-    .rule-action {
-      background: transparent;
-      border: none;
-      color: var(--vscode-descriptionForeground);
-      cursor: pointer;
-      padding: 2px 4px;
-      font-size: 14px;
-      border-radius: 3px;
-      transition: all 0.15s;
-    }
-
-    .rule-action:hover {
-      background: var(--vscode-list-hoverBackground);
-      color: var(--vscode-editor-foreground);
-    }
-
-    .rule-action.delete:hover {
-      color: var(--vscode-errorForeground);
-    }
-
-    .settings-view {
-      padding: 16px;
-    }
-
-    .settings-section {
-      margin-bottom: 24px;
-    }
-
-    .settings-section-title {
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.7;
-      margin-bottom: 12px;
-      letter-spacing: 0.5px;
-    }
-
-    .settings-item {
-      margin-bottom: 16px;
-    }
-
-    .settings-label {
-      font-size: 12px;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.9;
-      margin-bottom: 6px;
-      display: block;
-    }
-
-    .settings-description {
-      font-size: 11px;
-      color: var(--vscode-descriptionForeground);
-      opacity: 0.7;
-      margin-top: 4px;
-      line-height: 1.4;
-    }
-
-    .stats-config-options {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin: 12px 0;
-    }
-
-    .checkbox-label {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      cursor: pointer;
-      font-size: 12px;
-      color: var(--vscode-editor-foreground);
-      opacity: 0.9;
-    }
-
-    .checkbox-label:hover {
-      opacity: 1;
-    }
-
-    .stat-column-checkbox {
-      cursor: pointer;
-    }
-
-    .settings-input {
-      width: 100%;
-      padding: 6px 8px;
-      background: var(--vscode-input-background);
-      border: 1px solid var(--vscode-input-border);
-      color: var(--vscode-input-foreground);
-      border-radius: 4px;
-      font-size: 12px;
-      font-family: var(--vscode-font-family);
-    }
-
-    .settings-input:focus {
-      outline: 1px solid var(--vscode-focusBorder);
-      border-color: var(--vscode-focusBorder);
-    }
-
-    .archive-view {
-      padding: 0;
-    }
-
-    .archived-task {
-      opacity: 0.7;
-      border-left-color: var(--vscode-descriptionForeground) !important;
-    }
-
-    .archived-task .task-description,
-    .archived-task .task-related-files {
-      display: block;
-    }
-
-    .archived-task:hover {
-      opacity: 1;
-    }
   </style>
 </head>
 <body>
   <div id="toast" class="toast"></div>
   <div class="header-top">
     <div class="board-title-wrapper">
-      <div class="board-title" id="boardTitle">${this.escapeHtml(
+      <div class="board-title" id="boardTitle">${escapeHtml(
         board.title
       )}</div>
       <button class="title-edit-btn" id="titleEditBtn" title="Edit title">✎</button>
@@ -2932,7 +1869,7 @@ columns:
       </div>
 
       <div class="stats">
-        ${this.getStatsHtml(board, totalTasks)}
+        ${generateStatsHtml(board, totalTasks)}
       </div>
     </div>
 
@@ -2956,12 +1893,12 @@ columns:
         <div class="column-header">
           <div class="column-header-title">
             <span class="collapse-icon">▼</span>
-            <span>${this.escapeHtml(col.title)}</span>
+            <span>${escapeHtml(col.title)}</span>
           </div>
           <div class="column-header-right">
             <button class="add-task-btn" data-column-id="${
               col.id
-            }" title="Add task to ${this.escapeHtml(col.title)}">+</button>
+            }" title="Add task to ${escapeHtml(col.title)}">+</button>
             <span class="task-count">${col.tasks.length}</span>
           </div>
         </div>
@@ -2971,19 +1908,18 @@ columns:
             : col.tasks
                 .map(
                   (task, index) => `
-            <div class="task ${task.priority ? this.getPriorityClassName(task.priority) : ""}"
+            <div class="task ${task.priority ? getPriorityClassName(task.priority) : ""}"
                  data-task-id="${task.id}"
                  data-column-id="${col.id}"
-                 data-task-index="${index}"
                  data-priority="${task.priority || ""}"
                  data-assignee="${task.assignee || ""}"
                  data-tags="${
-                   task.tags ? this.escapeHtml(JSON.stringify(task.tags)) : "[]"
+                   task.tags ? escapeHtml(JSON.stringify(task.tags)) : "[]"
                  }"
                  draggable="true">
               <div class="task-header">
                 <span class="drag-handle">⋮⋮</span>
-                <div class="task-title">${this.escapeHtml(task.title)}</div>
+                <div class="task-title">${escapeHtml(task.title)}</div>
                 <div class="task-id" data-task-id="${task.id}" title="Click to copy">${task.id}</div>
                 <div class="task-actions">
                   <button class="task-action edit" data-action="edit" title="Edit">✎</button>
@@ -2993,6 +1929,17 @@ columns:
                       : '<button class="task-action complete" data-action="complete" title="Mark as done">✓</button>'
                   }
                   <button class="task-action delete" data-action="delete" title="Delete">×</button>
+                  <div class="agent-split-btn">
+                    <button class="agent-primary" data-action="send-agent-default" title="Send to agent">▷</button>
+                    <button class="agent-dropdown-toggle" data-action="agent-dropdown" title="Choose agent">▾</button>
+                    <div class="agent-dropdown-menu" style="display: none;">
+                      <button class="agent-option" data-agent="copilot">Copilot</button>
+                      ${this.isCursorIDE() ? '<button class="agent-option" data-agent="cursor">Cursor</button>' : ''}
+                      <button class="agent-option" data-agent="claude-code">Claude</button>
+                      <div class="agent-divider"></div>
+                      <button class="agent-option" data-agent="copy">Copy prompt</button>
+                    </div>
+                  </div>
                 </div>
               </div>
               <div class="task-description">${this.renderMarkdown(
@@ -3002,10 +1949,10 @@ columns:
                 task.priority || task.assignee || (task.tags && task.tags.length > 0)
                   ? `
                 <div class="task-metadata">
-                  ${task.priority ? `<span class="task-priority-label ${this.getPriorityClassName(task.priority)}" data-task-id="${task.id}" title="Click to change priority">${this.escapeHtml(task.priority.toUpperCase())}</span>` : ""}
+                  ${task.priority ? `<span class="task-priority-label ${getPriorityClassName(task.priority)}" data-task-id="${task.id}" title="Click to change priority">${escapeHtml(task.priority.toUpperCase())}</span>` : ""}
                   ${
                     task.assignee
-                      ? `<span class="task-assignee">${this.escapeHtml(
+                      ? `<span class="task-assignee">${escapeHtml(
                           task.assignee
                         )}</span>`
                       : ""
@@ -3015,7 +1962,7 @@ columns:
                       ? task.tags
                           .map(
                             (tag) =>
-                              `<span class="task-tag">${this.escapeHtml(tag)}</span>`
+                              `<span class="task-tag">${escapeHtml(tag)}</span>`
                           )
                           .join("")
                       : ""
@@ -3030,11 +1977,11 @@ columns:
                 <div class="subtasks-container">
                   <div class="subtask-progress">
                     <div class="subtask-progress-bar">
-                      <div class="subtask-progress-fill" style="width: ${this.getSubtaskProgress(
+                      <div class="subtask-progress-fill" style="width: ${getSubtaskProgress(
                         task.subtasks
                       )}%"></div>
                     </div>
-                    <span class="subtask-count">${this.getCompletedSubtaskCount(
+                    <span class="subtask-count">${getCompletedSubtaskCount(
                       task.subtasks
                     )}/${task.subtasks.length}</span>
                   </div>
@@ -3048,7 +1995,7 @@ columns:
                           subtask.id
                         }">
                         <div class="subtask-checkbox"></div>
-                        <span class="subtask-title">${this.escapeHtml(
+                        <span class="subtask-title">${escapeHtml(
                           subtask.title
                         )}</span>
                       </li>
@@ -3067,9 +2014,9 @@ columns:
                   ${task.relatedFiles
                     .map(
                       (file) => `
-                    <div class="related-file" data-file="${this.escapeHtml(
+                    <div class="related-file" data-file="${escapeHtml(
                       file
-                    )}">📄 ${this.escapeHtml(file)}</div>
+                    )}">📄 ${escapeHtml(file)}</div>
                   `
                     )
                     .join("")}
@@ -3107,7 +2054,7 @@ columns:
               rule.id
             }" data-rule-type="always">
               <div class="rule-number">${rule.id}</div>
-              <div class="rule-text">${this.escapeHtml(rule.rule)}</div>
+              <div class="rule-text">${escapeHtml(rule.rule)}</div>
               <div class="rule-actions">
                 <button class="rule-action edit" data-action="edit-rule" title="Edit">✎</button>
                 <button class="rule-action delete" data-action="delete-rule" title="Delete">×</button>
@@ -3134,7 +2081,7 @@ columns:
               rule.id
             }" data-rule-type="never">
               <div class="rule-number">${rule.id}</div>
-              <div class="rule-text">${this.escapeHtml(rule.rule)}</div>
+              <div class="rule-text">${escapeHtml(rule.rule)}</div>
               <div class="rule-actions">
                 <button class="rule-action edit" data-action="edit-rule" title="Edit">✎</button>
                 <button class="rule-action delete" data-action="delete-rule" title="Delete">×</button>
@@ -3161,7 +2108,7 @@ columns:
               rule.id
             }" data-rule-type="prefer">
               <div class="rule-number">${rule.id}</div>
-              <div class="rule-text">${this.escapeHtml(rule.rule)}</div>
+              <div class="rule-text">${escapeHtml(rule.rule)}</div>
               <div class="rule-actions">
                 <button class="rule-action edit" data-action="edit-rule" title="Edit">✎</button>
                 <button class="rule-action delete" data-action="delete-rule" title="Delete">×</button>
@@ -3188,7 +2135,7 @@ columns:
               rule.id
             }" data-rule-type="context">
               <div class="rule-number">${rule.id}</div>
-              <div class="rule-text">${this.escapeHtml(rule.rule)}</div>
+              <div class="rule-text">${escapeHtml(rule.rule)}</div>
               <div class="rule-actions">
                 <button class="rule-action edit" data-action="edit-rule" title="Edit">✎</button>
                 <button class="rule-action delete" data-action="delete-rule" title="Delete">×</button>
@@ -3216,7 +2163,7 @@ columns:
             (task) => `
           <div class="task archived-task" data-task-id="${task.id}">
             <div class="task-header">
-              <div class="task-title">${this.escapeHtml(task.title)}</div>
+              <div class="task-title">${escapeHtml(task.title)}</div>
             </div>
             <div class="task-id" data-task-id="${task.id}" title="Click to copy task ID">${task.id}</div>
             <div class="task-description">${this.renderMarkdown(
@@ -3229,9 +2176,9 @@ columns:
                 ${task.relatedFiles
                   .map(
                     (file) => `
-                  <div class="related-file" data-file="${this.escapeHtml(
+                  <div class="related-file" data-file="${escapeHtml(
                     file
-                  )}">📄 ${this.escapeHtml(file)}</div>
+                  )}">📄 ${escapeHtml(file)}</div>
                 `
                   )
                   .join("")}
@@ -3251,6 +2198,200 @@ columns:
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+    const IS_CURSOR = ${this.isCursorIDE()};
+
+    class DragController {
+      constructor(root) {
+        this.root = root;
+        this.dragState = null;
+        this.dropSlot = null;
+        this.activeColumn = null;
+        this.rafId = null;
+        this.pendingRender = null;
+      }
+
+      init() {
+        if (!this.root) return;
+        this.root.addEventListener('dragstart', (e) => this.onDragStart(e));
+        this.root.addEventListener('dragend', () => this.onDragEnd());
+        this.root.addEventListener('dragover', (e) => this.onDragOver(e));
+        this.root.addEventListener('drop', (e) => this.onDrop(e));
+        this.root.addEventListener('dragleave', (e) => this.onDragLeave(e));
+      }
+
+      onDragStart(e) {
+        const task = e.target.closest('.task');
+        if (!task) return;
+        const column = task.closest('.column-section');
+        if (!column) return;
+
+        this.dragState = {
+          taskId: task.dataset.taskId,
+          fromColumnId: task.dataset.columnId
+        };
+
+        task.classList.add('dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', task.dataset.taskId || '');
+        }
+        this.setActiveColumn(column);
+      }
+
+      onDragOver(e) {
+        if (!this.dragState) return;
+        const column = e.target.closest('.column-section');
+        if (!column) return;
+
+        e.preventDefault();
+        if (e.dataTransfer) {
+          e.dataTransfer.dropEffect = 'move';
+        }
+
+        this.scheduleRender(column, e.clientY);
+      }
+
+      onDrop(e) {
+        if (!this.dragState) return;
+        const column = e.target.closest('.column-section');
+        if (!column) return;
+
+        e.preventDefault();
+
+        const toIndex = this.getPlannedIndex(column, e.clientY);
+        vscode.postMessage({
+          type: 'moveTask',
+          taskId: this.dragState.taskId,
+          fromColumn: this.dragState.fromColumnId,
+          toColumn: column.dataset.columnId,
+          toIndex: toIndex
+        });
+
+        this.reset();
+      }
+
+      onDragEnd() {
+        this.reset();
+      }
+
+      onDragLeave(e) {
+        if (!this.dragState) return;
+        const related = e.relatedTarget;
+        if (!related || !this.root.contains(related)) {
+          this.clearSlot();
+          this.clearActiveColumn();
+        }
+      }
+
+      scheduleRender(column, y) {
+        this.pendingRender = { column, y };
+        if (this.rafId) return;
+        this.rafId = requestAnimationFrame(() => {
+          this.rafId = null;
+          if (!this.pendingRender) return;
+          const { column: pendingColumn, y: pendingY } = this.pendingRender;
+          this.pendingRender = null;
+          this.renderSlot(pendingColumn, pendingY);
+        });
+      }
+
+      renderSlot(column, y) {
+        const tasks = Array.from(column.querySelectorAll('.task:not(.dragging)'));
+        let index = tasks.length;
+
+        for (let i = 0; i < tasks.length; i++) {
+          const rect = tasks[i].getBoundingClientRect();
+          if (y < rect.top + rect.height / 2) {
+            index = i;
+            break;
+          }
+        }
+
+        this.ensureDropSlot();
+        this.dropSlot.dataset.index = String(index);
+        if (index >= tasks.length) {
+          column.appendChild(this.dropSlot);
+        } else {
+          column.insertBefore(this.dropSlot, tasks[index]);
+        }
+
+        this.setActiveColumn(column);
+      }
+
+      ensureDropSlot() {
+        if (this.dropSlot) return;
+        this.dropSlot = document.createElement('div');
+        this.dropSlot.className = 'drop-slot';
+      }
+
+      getPlannedIndex(column, y) {
+        if (this.dropSlot && this.dropSlot.parentElement === column && this.dropSlot.dataset.index) {
+          const parsed = parseInt(this.dropSlot.dataset.index, 10);
+          if (!Number.isNaN(parsed)) {
+            return parsed;
+          }
+        }
+        return this.getIndexFromY(column, y);
+      }
+
+      getIndexFromY(column, y) {
+        const tasks = Array.from(column.querySelectorAll('.task:not(.dragging)'));
+        for (let i = 0; i < tasks.length; i++) {
+          const rect = tasks[i].getBoundingClientRect();
+          if (y < rect.top + rect.height / 2) {
+            return i;
+          }
+        }
+        return tasks.length;
+      }
+
+      setActiveColumn(column) {
+        if (this.activeColumn === column) return;
+        if (this.activeColumn) {
+          this.activeColumn.classList.remove('drag-target');
+        }
+        this.activeColumn = column;
+        this.activeColumn.classList.add('drag-target');
+      }
+
+      clearActiveColumn() {
+        if (this.activeColumn) {
+          this.activeColumn.classList.remove('drag-target');
+          this.activeColumn = null;
+        }
+      }
+
+      clearSlot() {
+        if (this.dropSlot && this.dropSlot.parentElement) {
+          this.dropSlot.parentElement.removeChild(this.dropSlot);
+        }
+        this.dropSlot = null;
+      }
+
+      clearDraggingClass() {
+        this.root.querySelectorAll('.task.dragging').forEach(task => task.classList.remove('dragging'));
+      }
+
+      reset() {
+        this.clearSlot();
+        this.clearActiveColumn();
+        this.clearDraggingClass();
+        this.dragState = null;
+      }
+    }
+
+    let dragController = null;
+
+    function initDragAndDrop() {
+      const tasksTab = document.getElementById('tasksTab');
+      if (!tasksTab) return;
+      if (!dragController) {
+        dragController = new DragController(tasksTab);
+        dragController.init();
+      } else {
+        dragController.reset();
+      }
+    }
 
 
     // Search state and logic
@@ -3424,6 +2565,68 @@ columns:
       });
     });
 
+    // Agent split button - primary action (send to default agent)
+    document.querySelectorAll('[data-action="send-agent-default"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const taskEl = e.target.closest('.task');
+        const taskId = taskEl.dataset.taskId;
+        vscode.postMessage({
+          type: 'sendToAgent',
+          taskId: taskId
+          // No agentType = use default
+        });
+      });
+    });
+
+    // Agent split button - dropdown toggle
+    document.querySelectorAll('[data-action="agent-dropdown"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const splitBtn = e.target.closest('.agent-split-btn');
+        const menu = splitBtn.querySelector('.agent-dropdown-menu');
+        const isVisible = menu.style.display !== 'none';
+
+        // Close all other dropdowns first
+        document.querySelectorAll('.agent-dropdown-menu').forEach(m => {
+          m.style.display = 'none';
+        });
+
+        if (!isVisible) {
+          menu.style.display = 'block';
+        }
+      });
+    });
+
+    // Agent dropdown options
+    document.querySelectorAll('.agent-option').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const agentType = e.target.dataset.agent;
+        const taskEl = e.target.closest('.task');
+        const taskId = taskEl.dataset.taskId;
+
+        // Close dropdown
+        const menu = e.target.closest('.agent-dropdown-menu');
+        menu.style.display = 'none';
+
+        vscode.postMessage({
+          type: 'sendToAgent',
+          taskId: taskId,
+          agentType: agentType
+        });
+      });
+    });
+
+    // Close dropdown when clicking elsewhere
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.agent-split-btn')) {
+        document.querySelectorAll('.agent-dropdown-menu').forEach(m => {
+          m.style.display = 'none';
+        });
+      }
+    });
+
     // Copy task ID to clipboard
     function showToast(message) {
       const toast = document.getElementById('toast');
@@ -3459,81 +2662,7 @@ columns:
     });
 
     // Drag and drop
-    let draggedTask = null;
-
-    document.querySelectorAll('.task').forEach(task => {
-      task.addEventListener('dragstart', (e) => {
-        draggedTask = task;
-        task.classList.add('dragging');
-        e.dataTransfer.effectAllowed = 'move';
-      });
-
-      task.addEventListener('dragend', () => {
-        task.classList.remove('dragging');
-        document.querySelectorAll('.task').forEach(t => t.classList.remove('drag-over'));
-      });
-
-      task.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-
-        if (draggedTask && draggedTask !== task) {
-          task.classList.add('drag-over');
-        }
-      });
-
-      task.addEventListener('dragleave', () => {
-        task.classList.remove('drag-over');
-      });
-
-      task.addEventListener('drop', (e) => {
-        e.preventDefault();
-        e.stopPropagation(); // Prevent column drop handler from also firing
-        task.classList.remove('drag-over');
-
-        if (!draggedTask || draggedTask === task) return;
-
-        const fromColumnId = draggedTask.dataset.columnId;
-        const toColumnId = task.dataset.columnId;
-        const taskId = draggedTask.dataset.taskId;
-        const toIndex = parseInt(task.dataset.taskIndex);
-
-        vscode.postMessage({
-          type: 'moveTask',
-          taskId: taskId,
-          fromColumn: fromColumnId,
-          toColumn: toColumnId,
-          toIndex: toIndex
-        });
-      });
-    });
-
-    // Allow drop on empty columns
-    document.querySelectorAll('.column-section').forEach(column => {
-      column.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-      });
-
-      column.addEventListener('drop', (e) => {
-        e.preventDefault();
-
-        if (!draggedTask) return;
-
-        const toColumnId = column.dataset.columnId;
-        const fromColumnId = draggedTask.dataset.columnId;
-        const taskId = draggedTask.dataset.taskId;
-
-        // Drop at end of column
-        vscode.postMessage({
-          type: 'moveTask',
-          taskId: taskId,
-          fromColumn: fromColumnId,
-          toColumn: toColumnId,
-          toIndex: 999 // Will be clamped to end
-        });
-      });
-    });
+    initDragAndDrop();
 
     // Add task buttons
     document.querySelectorAll('.add-task-btn').forEach(btn => {
@@ -3847,7 +2976,6 @@ columns:
                 <div class="task \${task.priority ? 'priority-' + task.priority.toLowerCase().replace(/[^a-z0-9]/g, '-') : ''}"
                      data-task-id="\${task.id}"
                      data-column-id="\${col.id}"
-                     data-task-index="\${index}"
                      data-priority="\${task.priority || ''}"
                      data-assignee="\${task.assignee || ''}"
                      data-tags="\${task.tags ? escapeHtml(JSON.stringify(task.tags)) : '[]'}"
@@ -3858,8 +2986,19 @@ columns:
                     <div class="task-id" data-task-id="\${task.id}" title="Click to copy">\${task.id}</div>
                     <div class="task-actions">
                       <button class="task-action edit" data-action="edit" title="Edit">✎</button>
-                      \${col.id === 'done' ? '<button class="task-action archive" data-action="archive" title="Archive">⬇</button>' : '<button class="task-action complete" data-action="complete" title="Mark as done">✓</button>'}
+                    \${col.id === 'done' ? '<button class="task-action archive" data-action="archive" title="Archive">⬇</button>' : '<button class="task-action complete" data-action="complete" title="Mark as done">✓</button>'}
                       <button class="task-action delete" data-action="delete" title="Delete">×</button>
+                      <div class="agent-split-btn">
+                        <button class="agent-primary" data-action="send-agent-default" title="Send to agent">▷</button>
+                        <button class="agent-dropdown-toggle" data-action="agent-dropdown" title="Choose agent">▾</button>
+                        <div class="agent-dropdown-menu" style="display: none;">
+                          <button class="agent-option" data-agent="copilot">Copilot</button>
+                          \${IS_CURSOR ? '<button class="agent-option" data-agent="cursor">Cursor</button>' : ''}
+                          <button class="agent-option" data-agent="claude-code">Claude</button>
+                          <div class="agent-divider"></div>
+                          <button class="agent-option" data-agent="copy">Copy prompt</button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                   <div class="task-description">\${renderMarkdown(task.description || '')}</div>
@@ -4199,6 +3338,52 @@ columns:
         });
       });
 
+      // Agent split button - primary action (send to default agent)
+      document.querySelectorAll('[data-action="send-agent-default"]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const taskEl = e.target.closest('.task');
+          const taskId = taskEl.dataset.taskId;
+          vscode.postMessage({
+            type: 'sendToAgent',
+            taskId: taskId
+          });
+        });
+      });
+
+      // Agent split button - dropdown toggle
+      document.querySelectorAll('[data-action="agent-dropdown"]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const splitBtn = e.target.closest('.agent-split-btn');
+          const menu = splitBtn.querySelector('.agent-dropdown-menu');
+          const isVisible = menu.style.display !== 'none';
+          document.querySelectorAll('.agent-dropdown-menu').forEach(m => {
+            m.style.display = 'none';
+          });
+          if (!isVisible) {
+            menu.style.display = 'block';
+          }
+        });
+      });
+
+      // Agent dropdown options
+      document.querySelectorAll('.agent-option').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const agentType = e.target.dataset.agent;
+          const taskEl = e.target.closest('.task');
+          const taskId = taskEl.dataset.taskId;
+          const menu = e.target.closest('.agent-dropdown-menu');
+          menu.style.display = 'none';
+          vscode.postMessage({
+            type: 'sendToAgent',
+            taskId: taskId,
+            agentType: agentType
+          });
+        });
+      });
+
       // Re-attach add task buttons
       document.querySelectorAll('.add-task-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -4223,8 +3408,8 @@ columns:
         });
       });
 
-      // Re-attach drag and drop
-      attachDragAndDrop();
+      // Reset drag and drop state
+      initDragAndDrop();
     }
 
     function attachSearchEventListeners() {
@@ -4249,231 +3434,9 @@ columns:
         });
       }
     }
-
-    function attachDragAndDrop() {
-      let draggedTask = null;
-
-      document.querySelectorAll('.task').forEach(task => {
-        task.addEventListener('dragstart', (e) => {
-          draggedTask = task;
-          task.classList.add('dragging');
-          e.dataTransfer.effectAllowed = 'move';
-        });
-
-        task.addEventListener('dragend', () => {
-          task.classList.remove('dragging');
-          document.querySelectorAll('.task').forEach(t => t.classList.remove('drag-over'));
-        });
-
-        task.addEventListener('dragover', (e) => {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'move';
-
-          if (draggedTask && draggedTask !== task) {
-            task.classList.add('drag-over');
-          }
-        });
-
-        task.addEventListener('dragleave', () => {
-          task.classList.remove('drag-over');
-        });
-
-        task.addEventListener('drop', (e) => {
-          e.preventDefault();
-          e.stopPropagation(); // Prevent column drop handler from also firing
-          task.classList.remove('drag-over');
-
-          if (!draggedTask || draggedTask === task) return;
-
-          const fromColumnId = draggedTask.dataset.columnId;
-          const toColumnId = task.dataset.columnId;
-          const taskId = draggedTask.dataset.taskId;
-          const toIndex = parseInt(task.dataset.taskIndex);
-
-          vscode.postMessage({
-            type: 'moveTask',
-            taskId: taskId,
-            fromColumn: fromColumnId,
-            toColumn: toColumnId,
-            toIndex: toIndex
-          });
-        });
-      });
-
-      document.querySelectorAll('.column-section').forEach(column => {
-        column.addEventListener('dragover', (e) => {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'move';
-        });
-
-        column.addEventListener('drop', (e) => {
-          e.preventDefault();
-
-          if (!draggedTask) return;
-
-          const toColumnId = column.dataset.columnId;
-          const fromColumnId = draggedTask.dataset.columnId;
-          const taskId = draggedTask.dataset.taskId;
-
-          vscode.postMessage({
-            type: 'moveTask',
-            taskId: taskId,
-            fromColumn: fromColumnId,
-            toColumn: toColumnId,
-            toIndex: 999
-          });
-        });
-      });
-    }
   </script>
 </body>
 </html>`;
-  }
-
-  private getErrorHtml(message: string, details?: string, lintResult?: LintResult): string {
-    const hasFixableIssues = lintResult?.issues.some(i => i.fixable) || false;
-    const issuesList = lintResult?.issues.map(issue => {
-      const icon = issue.type === 'error' ? '❌' : '⚠️';
-      const fixable = issue.fixable ? ' [fixable]' : '';
-      const location = issue.line ? ` (line ${issue.line})` : '';
-      return `<li>${icon} ${this.escapeHtml(issue.message)}${location}${fixable}</li>`;
-    }).join('') || '';
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    body {
-      padding: 20px;
-      color: var(--vscode-foreground);
-      font-family: var(--vscode-font-family);
-    }
-    .error-container {
-      max-width: 600px;
-    }
-    .error-title {
-      color: var(--vscode-errorForeground);
-      font-weight: bold;
-      margin-bottom: 12px;
-      font-size: 1.2em;
-    }
-    .error-details {
-      color: var(--vscode-descriptionForeground);
-      white-space: pre-line;
-      line-height: 1.6;
-      margin-top: 12px;
-      margin-bottom: 16px;
-    }
-    .issues-list {
-      background: var(--vscode-editor-background);
-      border: 1px solid var(--vscode-panel-border);
-      border-radius: 4px;
-      padding: 12px;
-      margin: 16px 0;
-    }
-    .issues-list h3 {
-      margin: 0 0 12px 0;
-      font-size: 1em;
-      color: var(--vscode-foreground);
-    }
-    .issues-list ul {
-      margin: 0;
-      padding-left: 20px;
-      list-style: none;
-    }
-    .issues-list li {
-      margin: 8px 0;
-      line-height: 1.5;
-    }
-    .action-buttons {
-      display: flex;
-      gap: 12px;
-      margin-top: 16px;
-    }
-    .btn {
-      padding: 8px 16px;
-      border: 1px solid var(--vscode-button-border);
-      border-radius: 2px;
-      cursor: pointer;
-      font-family: var(--vscode-font-family);
-      font-size: 13px;
-    }
-    .btn-primary {
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-    }
-    .btn-primary:hover {
-      background: var(--vscode-button-hoverBackground);
-    }
-    .btn-secondary {
-      background: var(--vscode-button-secondaryBackground);
-      color: var(--vscode-button-secondaryForeground);
-    }
-    .btn-secondary:hover {
-      background: var(--vscode-button-secondaryHoverBackground);
-    }
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-  </style>
-</head>
-<body>
-  <div class="error-container">
-    <div class="error-title">${this.escapeHtml(message)}</div>
-    ${details ? `<div class="error-details">${this.escapeHtml(details)}</div>` : ""}
-    
-    ${lintResult && lintResult.issues.length > 0 ? `
-    <div class="issues-list">
-      <h3>Issues Found (${lintResult.issues.length}):</h3>
-      <ul>${issuesList}</ul>
-    </div>
-    ` : ''}
-    
-    <div class="action-buttons">
-      ${hasFixableIssues ? `
-        <button class="btn btn-primary" id="fix-issues-btn">
-          Fix Issues (${lintResult?.issues.filter(i => i.fixable).length})
-        </button>
-      ` : ''}
-      <button class="btn btn-secondary" id="refresh-btn">
-        Refresh
-      </button>
-    </div>
-  </div>
-
-  <script>
-    const vscode = acquireVsCodeApi();
-    
-    const fixBtn = document.getElementById('fix-issues-btn');
-    if (fixBtn) {
-      fixBtn.addEventListener('click', () => {
-        vscode.postMessage({ type: 'fix-issues' });
-        fixBtn.disabled = true;
-        fixBtn.textContent = 'Fixing...';
-      });
-    }
-    
-    const refreshBtn = document.getElementById('refresh-btn');
-    if (refreshBtn) {
-      refreshBtn.addEventListener('click', () => {
-        vscode.postMessage({ type: 'refresh' });
-      });
-    }
-  </script>
-</body>
-</html>`;
-  }
-
-  private escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
   }
 
   private renderMarkdown(text: string | undefined): string {

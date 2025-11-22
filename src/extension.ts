@@ -4,6 +4,7 @@ import { BoardViewProvider } from './boardViewProvider';
 import { BrainfileCompletionProvider } from './completionProvider';
 import { BrainfileCodeLensProvider } from './codeLensProvider';
 import { BrainfileHoverProvider } from './hoverProvider';
+import { BrainfileDecorationProvider } from './fileDecorationProvider';
 import { BrainfileParser, BrainfileSerializer } from '@brainfile/core';
 
 const LOG_PREFIX = '[Brainfile]';
@@ -30,7 +31,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   try {
     // Register the tasks view provider
-    const provider = new BoardViewProvider(context.extensionUri);
+    const provider = new BoardViewProvider(context.extensionUri, context);
 
     // Register webview provider with proper options
     const webviewDisposable = vscode.window.registerWebviewViewProvider(
@@ -108,6 +109,14 @@ export function activate(context: vscode.ExtensionContext) {
       )
     );
     log('Hover provider registered');
+
+    // Register File Decoration provider
+    const decorationProvider = new BrainfileDecorationProvider();
+    context.subscriptions.push(
+      vscode.window.registerFileDecorationProvider(decorationProvider)
+    );
+    context.subscriptions.push(decorationProvider);
+    log('File decoration provider registered');
 
     // Set context for keybinding
     vscode.commands.executeCommand('setContext', 'brainfile.boardActive', true);

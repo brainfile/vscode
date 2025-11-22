@@ -159,11 +159,49 @@ Learn more: [AI Agent Integration Guide](https://brainfile.md/agents/integration
 
 MIT License - see [LICENSE](LICENSE) file for details
 
+## 🛠️ Development
+
+### Prerequisites
+
+- Node.js 18+
+- npm 9+
+
+### Setup
+
+```bash
+cd vscode
+npm install
+npm run compile
+```
+
+### Testing
+
+```bash
+npm test          # Run all 230 tests
+npm run compile   # TypeScript check + esbuild
+```
+
+### Architecture
+
+The extension uses a modular architecture under `src/board/`:
+
+| Module | Purpose |
+|--------|---------|
+| `types.ts` | Type definitions, guards, constants |
+| `messages.ts` | Webview message validation |
+| `html/` | HTML generation (utils, styles, stats, error) |
+| `agents/` | AI prompt builder for copilot/cursor/claude |
+| `data/` | Pure board operations (immutable) |
+| `handlers/` | Message router dispatch |
+| `orchestrator.ts` | File I/O coordination |
+
+All board operations are pure functions with immutable updates, making them easily testable without VS Code runtime.
+
 ## 🌟 Contributing
 
-Contributions are welcome! See the [Contributing Guide](https://github.com/brainfile/protocol/blob/main/CONTRIBUTING.md)
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
 
 ---
 
-**Made with ❤️ by the Brainfile team**  
+**Made with ❤️ by the Brainfile team**
 Website: [brainfile.md](https://brainfile.md) | GitHub: [@brainfile](https://github.com/brainfile)
