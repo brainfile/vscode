@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { Search, X } from "lucide-vue-next";
 import type { FiltersState } from "../types";
 
 const props = defineProps<{
@@ -23,6 +24,7 @@ function updateQuery(value: string) {
 <template>
   <div class="search-section">
     <div class="search-container">
+      <Search class="search-icon" :size="14" />
       <input
         type="text"
         id="searchInput"
@@ -38,7 +40,7 @@ function updateQuery(value: string) {
         :style="{ display: hasActiveFilters ? 'block' : 'none' }"
         @click="emit('reset')"
       >
-        ×
+        <X :size="12" />
       </button>
     </div>
   </div>

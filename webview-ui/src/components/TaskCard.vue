@@ -3,6 +3,7 @@ import type { Task } from "@brainfile/core";
 import { computed, ref } from "vue";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { Archive, Check, ChevronDown, GripVertical, Pencil, Send, Trash2 } from "lucide-vue-next";
 import type { AgentType, DetectedAgent } from "../types";
 
 const props = defineProps<{
@@ -86,7 +87,7 @@ function selectAgent(agent: AgentType) {
 <template>
   <div
     class="task"
-    :class="priorityClass"
+    :class="[priorityClass, { expanded }]"
     draggable="true"
     :data-task-id="task.id"
     :data-column-id="columnId"
@@ -97,13 +98,15 @@ function selectAgent(agent: AgentType) {
     @click="expanded = !expanded"
   >
     <div class="task-header">
-      <span class="drag-handle">⋮⋮</span>
+      <span class="drag-handle"><GripVertical :size="14" /></span>
       <div class="task-title">{{ task.title }}</div>
       <div class="task-id" :data-task-id="task.id" title="Click to copy" @click.stop="copyTaskId">
         {{ task.id }}
       </div>
       <div class="task-actions">
-        <button class="task-action edit" data-action="edit" title="Edit" @click.stop="emit('edit')">✎</button>
+        <button class="task-action edit" data-action="edit" title="Edit" @click.stop="emit('edit')">
+          <Pencil :size="14" />
+        </button>
         <button
           v-if="columnId === 'done'"
           class="task-action archive"
@@ -111,7 +114,7 @@ function selectAgent(agent: AgentType) {
           title="Archive"
           @click.stop="emit('archive')"
         >
-          ⬇
+          <Archive :size="14" />
         </button>
         <button
           v-else
@@ -120,12 +123,18 @@ function selectAgent(agent: AgentType) {
           title="Mark as done"
           @click.stop="emit('complete')"
         >
-          ✓
+          <Check :size="14" />
         </button>
-        <button class="task-action delete" data-action="delete" title="Delete" @click.stop="emit('delete')">×</button>
+        <button class="task-action delete" data-action="delete" title="Delete" @click.stop="emit('delete')">
+          <Trash2 :size="14" />
+        </button>
         <div class="agent-split-btn">
-          <button class="agent-primary" data-action="send-agent-default" title="Send to agent" @click.stop="emit('send-agent', primaryAgent)">▷</button>
-          <button class="agent-dropdown-toggle" data-action="agent-dropdown" title="Choose agent" @click.stop="toggleDropdown">▾</button>
+          <button class="agent-primary" data-action="send-agent-default" title="Send to agent" @click.stop="emit('send-agent', primaryAgent)">
+            <Send :size="14" />
+          </button>
+          <button class="agent-dropdown-toggle" data-action="agent-dropdown" title="Choose agent" @click.stop="toggleDropdown">
+            <ChevronDown :size="12" />
+          </button>
           <div class="agent-dropdown-menu" v-show="dropdownOpen">
             <button
               v-for="agent in agents"

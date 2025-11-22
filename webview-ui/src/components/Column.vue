@@ -3,6 +3,8 @@ import type { Column, Task } from "@brainfile/core";
 import { useBoardStore } from "../store/board";
 import TaskCard from "./TaskCard.vue";
 import type { AgentType, DetectedAgent } from "../types";
+import draggable from "vuedraggable";
+import { ChevronDown, Plus } from "lucide-vue-next";
 
 const props = defineProps<{
   column: Column;
@@ -61,45 +63,71 @@ function onDrop(event: DragEvent, targetTaskId?: string) {
     // ignore malformed drag payload
   }
 }
+
+function handleChange(evt: any) {
+  const toColumnId = props.column.id;
+  const fromColumnId = (evt?.from as HTMLElement)?.dataset.columnId || toColumnId;
+
+  if (evt?.moved) {
+    const { newIndex } = evt.moved;
+    const taskId = evt.moved.element.id as string;
+    emit("move-task", { taskId, fromColumnId: toColumnId, toColumnId, toIndex: newIndex });
+    return;
+  }
+
+  if (evt?.added) {
+    const task: Task = evt.added.element;
+    const toIndex = evt.added.newIndex ?? 0;
+    emit("move-task", { taskId: task.id, fromColumnId, toColumnId, toIndex });
+  }
+}
 </script>
 
 <template>
   <div class="column-section" :class="{ collapsed }" @dragover.prevent @drop="onDrop($event)">
     <div class="column-header" @click="emit('toggle-collapse')">
       <div class="column-header-title">
-        <span class="collapse-icon">▼</span>
+        <span class="collapse-icon"><ChevronDown :size="12" /></span>
         <span>{{ column.title }}</span>
       </div>
       <div class="column-header-right">
-        <button class="add-task-btn" :data-column-id="column.id" title="Add task" @click.stop="emit('add-task')">+</button>
+        <button class="add-task-btn" :data-column-id="column.id" title="Add task" @click.stop="emit('add-task')">
+          <Plus :size="14" />
+        </button>
         <span class="task-count">{{ totalCount }}</span>
       </div>
     </div>
 
     <div v-if="!collapsed">
-      <div
-        v-for="task in tasks"
-        :key="task.id"
-        class="task-wrapper"
-        @dragover.prevent
-        @drop="onDrop($event, task.id)"
+      <draggable
+        :list="tasks"
+        item-key="id"
+        group="tasks"
+        :handle="'.drag-handle'"
+        :data-column-id="column.id"
+        :animation="150"
+        @change="handleChange"
       >
-        <TaskCard
-          :task="task"
-          :column-id="column.id"
-          :agents="agents"
-          :default-agent="defaultAgent"
-          :last-used-agent="lastUsedAgent"
-          @edit="emit('edit-task', task.id)"
-          @edit-priority="emit('edit-priority', task.id)"
-          @delete="emit('delete-task', { columnId: column.id, taskId: task.id })"
-          @archive="emit('archive-task', { columnId: column.id, taskId: task.id })"
-          @complete="emit('complete-task', { columnId: column.id, taskId: task.id })"
-          @open-file="emit('open-file', $event)"
-          @toggle-subtask="emit('toggle-subtask', { taskId: task.id, subtaskId: $event })"
-          @send-agent="emit('send-agent', { taskId: task.id, agentType: $event })"
-        />
-      </div>
+        <template #item="{ element }">
+          <div class="task-wrapper">
+            <TaskCard
+              :task="element"
+              :column-id="column.id"
+              :agents="agents"
+              :default-agent="defaultAgent"
+              :last-used-agent="lastUsedAgent"
+              @edit="emit('edit-task', element.id)"
+              @edit-priority="emit('edit-priority', element.id)"
+              @delete="emit('delete-task', { columnId: column.id, taskId: element.id })"
+              @archive="emit('archive-task', { columnId: column.id, taskId: element.id })"
+              @complete="emit('complete-task', { columnId: column.id, taskId: element.id })"
+              @open-file="emit('open-file', $event)"
+              @toggle-subtask="emit('toggle-subtask', { taskId: element.id, subtaskId: $event })"
+              @send-agent="emit('send-agent', { taskId: element.id, agentType: $event })"
+            />
+          </div>
+        </template>
+      </draggable>
 
       <div v-if="tasks.length === 0" class="empty-state">
         No tasks
