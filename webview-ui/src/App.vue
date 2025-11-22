@@ -217,73 +217,66 @@ function handleAgent(payload: { taskId: string; agentType?: string }) {
     </section>
   </div>
 </template>
-
 <style scoped>
 .app-shell {
-  padding: 16px 12px 24px;
-  background: radial-gradient(circle at 0% 0%, rgba(90, 119, 255, 0.08), transparent 35%),
-    radial-gradient(circle at 100% 0%, rgba(255, 136, 102, 0.08), transparent 30%),
-    linear-gradient(180deg, #0f1116 0%, #0c0e13 100%);
-  color: #f6f7fb;
+  padding: 0;
+  background: var(--vscode-sideBar-background);
+  color: var(--vscode-sideBar-foreground);
   min-height: 100vh;
-  font-family: "Sora", "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
 .tabs {
-  display: inline-flex;
-  gap: 6px;
-  margin: 8px 0 12px;
-  background: rgba(255, 255, 255, 0.04);
-  padding: 4px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
 }
 
 .tab {
-  border: none;
   background: transparent;
-  color: #c9cfde;
-  padding: 8px 14px;
-  border-radius: 10px;
+  border: none;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--vscode-descriptionForeground);
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+  letter-spacing: -0.01em;
 }
 
 .tab:hover {
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground);
 }
 
 .tab.active {
-  background: linear-gradient(120deg, #5ac8ff, #88ffbd);
-  color: #0b0c10;
-  box-shadow: 0 8px 24px rgba(90, 200, 255, 0.25);
+  color: var(--vscode-editor-foreground);
+  border-bottom-color: var(--vscode-focusBorder);
+  opacity: 0.95;
 }
 
 .panel {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  padding: 16px;
-  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(6px);
+  background: var(--vscode-sideBar-background);
+  padding: 0 12px 16px;
 }
 
 .columns-grid {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
 .empty-state {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #9ba3b4;
-  min-height: 140px;
-  border: 1px dashed rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
+  color: var(--vscode-descriptionForeground);
+  min-height: 120px;
+  border: 1px dashed var(--vscode-panel-border);
+  border-radius: 6px;
+  opacity: 0.7;
 }
 
 .banner {
@@ -292,22 +285,19 @@ function handleAgent(payload: { taskId: string; agentType?: string }) {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  margin: 12px 0;
-  border-radius: 12px;
-}
-
-.banner.warning {
-  background: rgba(255, 165, 92, 0.12);
-  border: 1px solid rgba(255, 165, 92, 0.35);
-  color: #ffd3ae;
+  margin: 12px 12px 8px;
+  border-radius: 6px;
+  background: var(--vscode-notifications-background);
+  border: 1px solid var(--vscode-notifications-border);
+  color: var(--vscode-notifications-foreground);
 }
 
 .banner__actions .ghost {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  color: #fff;
+  border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
+  color: var(--vscode-button-foreground);
   padding: 6px 12px;
-  border-radius: 10px;
+  border-radius: 4px;
   cursor: pointer;
 }
 

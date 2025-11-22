@@ -186,21 +186,18 @@ async function copyTaskId() {
 
 <style scoped>
 .task {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 12px;
-  border-left: 4px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  border: none;
+  border-left: 3px solid transparent;
+  padding: 10px 16px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  transition: border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
 }
 
 .task:hover {
-  border-color: rgba(90, 200, 255, 0.35);
-  transform: translateY(-1px);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+  background: var(--vscode-list-hoverBackground);
 }
 
 .task__header {
@@ -217,44 +214,57 @@ async function copyTaskId() {
 
 .handle {
   cursor: grab;
-  opacity: 0.6;
+  opacity: 0;
+  color: var(--vscode-descriptionForeground);
+  transition: opacity 0.15s;
+}
+
+.task:hover .handle {
+  opacity: 0.5;
 }
 
 .task-id {
   margin: 0;
-  color: #9ba3b4;
+  color: var(--vscode-descriptionForeground);
   font-size: 12px;
   cursor: pointer;
+  opacity: 0.6;
 }
 
 .task-id .copied {
   margin-left: 6px;
-  color: #9ef5c0;
+  color: var(--vscode-testing-iconPassed);
 }
 
 h3 {
   margin: 2px 0 0;
-  font-size: 16px;
-  color: #f6f7fb;
+  font-size: 13px;
+  color: var(--vscode-editor-foreground);
+  letter-spacing: -0.01em;
 }
 
 .actions {
   display: inline-flex;
   gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.task:hover .actions {
+  opacity: 1;
 }
 
 .actions .ghost {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
-  color: #dce2f2;
-  padding: 6px 8px;
-  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  padding: 4px 6px;
+  border-radius: 4px;
   cursor: pointer;
 }
 
 .actions .danger {
-  border-color: rgba(255, 99, 132, 0.5);
-  color: #ff9aa8;
+  color: var(--vscode-inputValidation-errorForeground);
 }
 
 .metadata {
@@ -264,14 +274,16 @@ h3 {
 }
 
 .pill {
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 10px;
-  padding: 4px 10px;
-  font-size: 12px;
+  background: none;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
 }
 
 .pill.muted {
-  color: #c9cfde;
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.7;
 }
 
 .body {
@@ -282,17 +294,17 @@ h3 {
 
 .description :deep(p) {
   margin: 0 0 6px;
-  color: #cfd6e6;
+  color: var(--vscode-descriptionForeground);
 }
 
 .description :deep(code) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--vscode-textCodeBlock-background);
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: 4px;
 }
 
 .label {
-  color: #9ba3b4;
+  color: var(--vscode-descriptionForeground);
   font-size: 12px;
   margin-bottom: 4px;
 }
@@ -311,14 +323,14 @@ h3 {
   align-items: center;
   gap: 6px;
   padding: 6px;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--vscode-sideBar-background);
 }
 
 .subtasks li.done {
   text-decoration: line-through;
-  color: #9ba3b4;
+  color: var(--vscode-descriptionForeground);
 }
 
 .checkbox {
@@ -332,11 +344,11 @@ h3 {
 }
 
 .file {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
-  color: #dce2f2;
+  border: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-input-background);
+  color: var(--vscode-textLink-foreground);
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
 }
 
@@ -344,6 +356,7 @@ h3 {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-top: 4px;
 }
 
 .agent-actions {
@@ -353,19 +366,42 @@ h3 {
 }
 
 .primary {
-  background: linear-gradient(120deg, #5ac8ff, #9ef5c0);
-  color: #0d1117;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
   border: none;
-  padding: 8px 12px;
-  border-radius: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
   cursor: pointer;
 }
 
 select {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #f6f7fb;
-  padding: 8px 10px;
-  border-radius: 10px;
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border);
+  color: var(--vscode-input-foreground);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.task.priority-critical { border-left-color: #ffffff; }
+.task.priority-high { border-left-color: rgba(255, 255, 255, 0.8); }
+.task.priority-medium { border-left-color: rgba(255, 255, 255, 0.5); }
+.task.priority-low { border-left-color: rgba(255, 255, 255, 0.2); }
+
+.task-priority-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.15s;
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.6;
+}
+
+.task-priority-label:hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground);
 }
 </style>

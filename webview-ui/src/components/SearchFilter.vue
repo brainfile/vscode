@@ -123,17 +123,23 @@ function updateSelect(key: keyof Omit<FiltersState, "query">, values: string[]) 
 
 .search-input {
   width: 100%;
-  padding: 12px 12px 12px 38px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  color: #f6f7fb;
+  padding: 6px 32px 6px 10px;
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 4px;
+  color: var(--vscode-input-foreground);
+  font-size: 12px;
+  font-family: var(--vscode-font-family);
   outline: none;
 }
 
 .search-input:focus {
-  border-color: rgba(90, 200, 255, 0.5);
-  box-shadow: 0 0 0 3px rgba(90, 200, 255, 0.12);
+  border-color: var(--vscode-focusBorder);
+}
+
+.search-input::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+  opacity: 0.8;
 }
 
 .search-icon {
@@ -154,30 +160,30 @@ function updateSelect(key: keyof Omit<FiltersState, "query">, values: string[]) 
   display: flex;
   flex-direction: column;
   gap: 4px;
-  color: #c9cfde;
+  color: var(--vscode-descriptionForeground);
 }
 
 .label {
   font-size: 12px;
-  color: #9ba3b4;
+  color: var(--vscode-descriptionForeground);
 }
 
 select {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #f6f7fb;
-  padding: 10px;
-  border-radius: 10px;
-  min-height: 44px;
+  background: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border);
+  color: var(--vscode-dropdown-foreground);
+  padding: 8px 10px;
+  border-radius: 6px;
+  min-height: 40px;
 }
 
 .ghost {
   align-self: flex-start;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
   background: transparent;
-  color: #f6f7fb;
-  padding: 8px 12px;
-  border-radius: 10px;
+  color: var(--vscode-button-foreground);
+  padding: 6px 10px;
+  border-radius: 6px;
   cursor: pointer;
 }
 </style>

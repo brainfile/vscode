@@ -110,15 +110,7 @@ function onDrop(event: DragEvent, targetTaskId?: string) {
 
 <style scoped>
 .column {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 120px;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+  border-bottom: 1px solid var(--vscode-panel-border);
 }
 
 .column__header {
@@ -126,12 +118,16 @@ function onDrop(event: DragEvent, targetTaskId?: string) {
   justify-content: space-between;
   align-items: center;
   cursor: pointer;
-  padding: 6px;
-  border-radius: 10px;
+  padding: 10px 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--vscode-editor-foreground);
+  opacity: 0.9;
 }
 
 .column__header:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--vscode-list-hoverBackground);
 }
 
 .title {
@@ -154,30 +150,39 @@ function onDrop(event: DragEvent, targetTaskId?: string) {
 }
 
 .count {
-  background: rgba(255, 255, 255, 0.06);
-  padding: 4px 10px;
-  border-radius: 10px;
-  color: #dce2f2;
-  font-weight: 600;
+  font-size: 11px;
+  opacity: 0.8;
+  font-family: 'JetBrains Mono', monospace;
 }
 
 .icon {
   border: none;
-  background: rgba(255, 255, 255, 0.08);
-  color: #f6f7fb;
-  padding: 6px 10px;
-  border-radius: 10px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  padding: 2px 6px;
+  border-radius: 4px;
   cursor: pointer;
+  opacity: 0;
+}
+
+.column__header:hover .icon {
+  opacity: 0.7;
+}
+
+.icon:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+  opacity: 1 !important;
 }
 
 .tasks {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding-bottom: 8px;
 }
 
 .task-wrapper {
-  border-radius: 12px;
+  border-radius: 6px;
 }
 
 .empty {

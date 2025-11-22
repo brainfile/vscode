@@ -57,63 +57,55 @@ defineEmits<{
 
 <style scoped>
 .board-header {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-bottom: 12px;
+  padding: 16px 12px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-sideBarSectionHeader-background);
 }
 
 .title-block {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
+  margin-bottom: 8px;
 }
 
 .eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.12em;
   font-size: 11px;
-  color: #9ba3b4;
+  color: var(--vscode-descriptionForeground);
   margin: 0 0 4px;
 }
 
 .title {
   margin: 0;
-  font-size: 26px;
-  font-weight: 700;
-  color: #f6f7fb;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--vscode-editor-foreground);
+  letter-spacing: -0.01em;
 }
 
 .actions {
   display: inline-flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
 .actions button {
-  border: none;
+  border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
   cursor: pointer;
   font-weight: 600;
-  padding: 8px 12px;
-  border-radius: 10px;
-  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
-}
-
-.actions .ghost {
-  background: rgba(255, 255, 255, 0.06);
-  color: #dce2f2;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-}
-
-.actions .primary {
-  background: linear-gradient(120deg, #5ac8ff, #9ef5c0);
-  color: #0d1117;
-  box-shadow: 0 10px 26px rgba(90, 200, 255, 0.25);
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  transition: background 0.15s, color 0.15s;
 }
 
 .actions button:hover {
-  transform: translateY(-1px);
+  background: var(--vscode-toolbar-hoverBackground);
+  color: var(--vscode-foreground);
 }
 
 .summary {
@@ -132,62 +124,57 @@ defineEmits<{
 .progress-label {
   display: flex;
   justify-content: space-between;
-  color: #c9cfde;
+  color: var(--vscode-descriptionForeground);
   font-weight: 600;
+  font-size: 12px;
 }
 
 .progress-label .value {
-  color: #9ef5c0;
+  color: var(--vscode-editor-foreground);
 }
 
 .progress-bar {
-  height: 10px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.05);
+  height: 6px;
+  border-radius: 3px;
+  background: var(--vscode-input-background);
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--vscode-panel-border);
 }
 
 .progress-bar .fill {
   height: 100%;
-  background: linear-gradient(120deg, #5ac8ff, #9ef5c0);
-  box-shadow: 0 6px 18px rgba(90, 200, 255, 0.3);
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
   transition: width 200ms ease;
 }
 
 .stat-chip {
-  padding: 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-panel-border);
 }
 
 .stat-chip.success {
-  border-color: rgba(158, 245, 192, 0.35);
-  background: rgba(158, 245, 192, 0.08);
+  border-color: var(--vscode-testing-iconPassed);
 }
 
 .label {
   display: block;
-  color: #9ba3b4;
-  font-size: 12px;
-  margin-bottom: 6px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  margin-bottom: 4px;
 }
 
 .count {
   font-weight: 700;
-  font-size: 18px;
-  color: #f6f7fb;
+  font-size: 16px;
+  color: var(--vscode-editor-foreground);
 }
 
 @media (max-width: 820px) {
   .title-block {
     flex-direction: column;
-  }
-
-  .actions {
-    width: 100%;
-    justify-content: flex-start;
+    align-items: flex-start;
   }
 
   .summary {

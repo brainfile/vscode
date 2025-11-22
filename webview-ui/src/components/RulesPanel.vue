@@ -67,10 +67,10 @@ const ruleTypes: { key: keyof Rules; label: string }[] = [
 }
 
 .rule-block {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 8px;
   padding: 12px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--vscode-sideBar-background);
 }
 
 header {
@@ -85,12 +85,12 @@ header {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   font-size: 11px;
-  color: #9ba3b4;
+  color: var(--vscode-descriptionForeground);
 }
 
 h3 {
   margin: 4px 0 0;
-  color: #f6f7fb;
+  color: var(--vscode-editor-foreground);
 }
 
 .rule-list {
@@ -107,8 +107,8 @@ h3 {
   justify-content: space-between;
   gap: 8px;
   padding: 10px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  background: var(--vscode-sideBarSectionHeader-background);
 }
 
 .content {
@@ -119,7 +119,7 @@ h3 {
 
 .id {
   font-size: 12px;
-  color: #9ba3b4;
+  color: var(--vscode-descriptionForeground);
 }
 
 .row-actions {
@@ -128,24 +128,23 @@ h3 {
 }
 
 .ghost {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
-  color: #dce2f2;
+  border: none;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
   padding: 6px 8px;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
 }
 
 .ghost.danger {
-  border-color: rgba(255, 99, 132, 0.5);
-  color: #ff9aa8;
+  color: var(--vscode-inputValidation-errorForeground);
 }
 
 .empty {
-  color: #9ba3b4;
+  color: var(--vscode-descriptionForeground);
   text-align: center;
   padding: 8px;
-  border: 1px dashed rgba(255, 255, 255, 0.1);
-  border-radius: 10px;
+  border: 1px dashed var(--vscode-panel-border);
+  border-radius: 8px;
 }
 </style>
