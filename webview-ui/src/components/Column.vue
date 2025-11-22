@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { Column, Task } from "@brainfile/core";
-import { useBoardStore } from "../store/board";
 import TaskCard from "./TaskCard.vue";
 import type { AgentType, DetectedAgent } from "../types";
 import draggable from "vuedraggable";
@@ -30,40 +29,6 @@ const emit = defineEmits<{
   (e: "move-task", payload: { taskId: string; fromColumnId: string; toColumnId: string; toIndex: number }): void;
 }>();
 
-const store = useBoardStore();
-
-function getDropIndex(targetTaskId?: string) {
-  const column = store.board?.columns.find((col) => col.id === props.column.id);
-  if (!column) return 0;
-  if (!targetTaskId) return column.tasks.length;
-  const idx = column.tasks.findIndex((task) => task.id === targetTaskId);
-  return idx === -1 ? column.tasks.length : idx;
-}
-
-function onDrop(event: DragEvent, targetTaskId?: string) {
-  event.preventDefault();
-  const raw = event.dataTransfer?.getData("application/json");
-  if (!raw) return;
-
-  try {
-    const payload = JSON.parse(raw) as { taskId: string; fromColumnId: string };
-    let toIndex = getDropIndex(targetTaskId);
-    const fromIndex = store.getTaskIndex(payload.fromColumnId, payload.taskId);
-    if (payload.fromColumnId === props.column.id && fromIndex !== -1 && fromIndex < toIndex) {
-      toIndex -= 1;
-    }
-
-    emit("move-task", {
-      taskId: payload.taskId,
-      fromColumnId: payload.fromColumnId,
-      toColumnId: props.column.id,
-      toIndex,
-    });
-  } catch {
-    // ignore malformed drag payload
-  }
-}
-
 function handleChange(evt: any) {
   const toColumnId = props.column.id;
   const fromColumnId = (evt?.from as HTMLElement)?.dataset.columnId || toColumnId;
@@ -84,7 +49,7 @@ function handleChange(evt: any) {
 </script>
 
 <template>
-  <div class="column-section" :class="{ collapsed }" @dragover.prevent @drop="onDrop($event)">
+  <div class="column-section" :class="{ collapsed }">
     <div class="column-header" @click="emit('toggle-collapse')">
       <div class="column-header-title">
         <span class="collapse-icon"><ChevronDown :size="12" /></span>
