@@ -149,6 +149,14 @@ Learn more: [AI Agent Integration Guide](https://brainfile.md/agents/integration
 - **[VSCode Extension Guide](https://brainfile.md/vscode/extension/)** - Detailed usage instructions
 - **[Templates](https://brainfile.md/core/templates/)** - Learn about task templates
 
+## 🛠️ Development & Architecture
+
+- **Vue + Vite Webview**: The board UI lives in `webview-ui/` (Vue 3 + Pinia + Vite). The build outputs hashed assets into `media/webview` that the extension loads via a CSP-safe manifest.
+- **Backend / Frontend Split**: `src/boardViewProvider.ts` now only boots the webview, streams board updates, and relays messages. All rendering happens inside the Vue app.
+- **Build commands**: `npm run webview:build` (webview bundle), `npm run compile` (webview build + esbuild backend), `npm run package` (production build for vsix). Scripts automatically pull types from `@brainfile/core`.
+- **Message contract**: Webview sends `webviewReady` before receiving `boardUpdate`/`agentsDetected`. Priority colors from VS Code settings are injected via `priorityStyles` in `boardUpdate`.
+- **Source packaging**: `webview-ui` sources are excluded from the vsix; only the built assets in `media/webview` ship with the extension.
+
 ## 🐛 Issues & Support
 
 - **[Report Issues](https://github.com/brainfile/vscode/issues)** - Bug reports and feature requests

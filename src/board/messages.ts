@@ -10,6 +10,7 @@ import type { WebviewToExtensionMessage, ExtensionToWebviewMessage } from "./typ
 
 /** All incoming message types from webview */
 export const WEBVIEW_MESSAGE_TYPES = {
+  WEBVIEW_READY: "webviewReady",
   UPDATE_TASK: "updateTask",
   EDIT_TASK: "editTask",
   EDIT_PRIORITY: "editPriority",
@@ -135,6 +136,7 @@ export function getMissingFields(message: WebviewToExtensionMessage): string[] {
     case "fix-issues":
     case "refresh":
     case "getAvailableAgents":
+    case "webviewReady":
       break;
   }
 

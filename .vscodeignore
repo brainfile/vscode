@@ -15,3 +15,5 @@ tsconfig.json
 esbuild.js
 *.log
 *.vsix
+webview-ui/**
+coverage/**

@@ -19,6 +19,7 @@ yarn-debug.log*
 Thumbs.db
 
 # IDE
+.vscode/
 .idea/
 *.swp
 *.swo
@@ -28,3 +29,4 @@ Thumbs.db
 *.tmp
 .cache/
 .aider*
+coverage/

@@ -1,5 +1,4 @@
 import * as fs from "fs";
-import { marked } from "marked";
 import * as path from "path";
 import * as vscode from "vscode";
 import { log } from "./extension";
@@ -20,14 +19,11 @@ import {
   AgentType,
   DetectedAgent,
   // HTML utilities
-  escapeHtml,
   getPriorityClassName,
-  getSubtaskProgress,
-  getCompletedSubtaskCount,
-  generateStatsHtml,
   generateErrorHtml,
   // Agent utilities
   buildAgentPrompt,
+  createParseWarningMessage,
   // Board operations
   updateTask,
   deleteTask,
@@ -57,6 +53,8 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
   private _parseErrorCount: number = 0;
   private _lastUsedAgent: AgentType = "copilot";
   private _context?: vscode.ExtensionContext;
+  private _webviewReady: boolean = false;
+  private _pendingBoard?: Board | null;
 
   constructor(private readonly _extensionUri: vscode.Uri, context?: vscode.ExtensionContext) {
     this._context = context;
@@ -104,6 +102,21 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
     agents.push({ type: "copy", label: "Copy", available: true });
 
     return agents;
+  }
+
+  /**
+   * Send available agents to the webview
+   */
+  private postAvailableAgents() {
+    if (!this._view) return;
+    const agents = this.detectAvailableAgents();
+    const defaultAgent = this.getDefaultAgent();
+    this._view.webview.postMessage({
+      type: "agentsDetected",
+      agents,
+      defaultAgent,
+      lastUsed: this._lastUsedAgent,
+    });
   }
 
   /**
@@ -359,8 +372,8 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
     // Listen for settings changes to update priority colors immediately
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("brainfile.priorities")) {
-        log("Priority settings changed, forcing full refresh");
-        this.updateView(true); // Force full refresh to regenerate CSS
+        log("Priority settings changed, refreshing webview styles");
+        this.updateView(false);
       }
     });
 
@@ -368,6 +381,18 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage((data) => {
       log("Received message from webview:", data.type, data);
       switch (data.type) {
+        case "webviewReady":
+          this._webviewReady = true;
+          if (this._pendingBoard !== undefined) {
+            this.postBoardUpdate(this._pendingBoard);
+            this._pendingBoard = undefined;
+          } else if (this._lastValidBoard) {
+            this.postBoardUpdate(this._lastValidBoard);
+          } else {
+            this.refresh();
+          }
+          this.postAvailableAgents();
+          break;
         case "updateTask":
           this.handleUpdateTask(
             data.columnId,
@@ -439,15 +464,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
           this.handleSendToAgent(data.taskId, data.agentType);
           break;
         case "getAvailableAgents":
-          // Send available agents to webview
-          const agents = this.detectAvailableAgents();
-          const defaultAgent = this.getDefaultAgent();
-          this._view?.webview.postMessage({
-            type: "agentsDetected",
-            agents,
-            defaultAgent,
-            lastUsed: this._lastUsedAgent
-          });
+          this.postAvailableAgents();
           break;
       }
     });
@@ -717,27 +734,25 @@ columns:
         log("Failed to parse board file");
         this._parseErrorCount++;
 
-        // If we have a last valid board, show it with a warning banner
         if (this._lastValidBoard && this._parseErrorCount <= 3) {
           log("Showing last valid board with warning");
-          // Send a warning message to the webview
-          if (!this._isFirstRender) {
-            this._view.webview.postMessage({
-              type: "parseWarning",
-              message: "Syntax error in brainfile.md - showing last valid state",
-            });
+          if (!this._isFirstRender && this._webviewReady) {
+            this._view.webview.postMessage(
+              createParseWarningMessage("Syntax error in brainfile.md - showing last valid state")
+            );
+            this.postBoardUpdate(this._lastValidBoard);
           }
-          // Don't update the view, keep showing the last valid board
           return;
         }
 
-        // If no valid board or too many consecutive errors, show error page with lint results
         const lintResult = BrainfileLinter.lint(content);
         this._view.webview.html = generateErrorHtml({
           message: "Failed to parse brainfile.md",
           details: "Check for YAML syntax errors in the frontmatter. Common issues:\n• Missing colons after keys\n• Incorrect indentation\n• Unclosed quotes or brackets",
           lintResult,
         });
+        this._webviewReady = false;
+        this._isFirstRender = true;
         return;
       }
 
@@ -754,24 +769,41 @@ columns:
         `(${board.columns.length} columns)`
       );
 
-      // Debug log for subtasks
-      board.columns.forEach((col) => {
-        col.tasks.forEach((task) => {
-          if (task.subtasks) {
-            log(`Task ${task.id} has ${task.subtasks.length} subtasks`);
-          }
-        });
-      });
-
-      // Always use full HTML refresh for reliable updates
-      log("Setting full HTML (firstRender:", this._isFirstRender, "forceRefresh:", forceFullRefresh, ")");
-      this._view.webview.html = this.getTasksHtml(board);
-      this._isFirstRender = false;
       this._lastValidBoard = board;
       this._lastContentHash = newHash;
+
+      this.ensureWebviewHtml(forceFullRefresh);
+      this.postBoardUpdate(board);
     } catch (error) {
       log("Error updating view:", error);
       vscode.window.showErrorMessage("Failed to update Brainfile board view");
+    }
+  }
+
+  private ensureWebviewHtml(forceFullRefresh: boolean) {
+    if (!this._view) return;
+
+    if (this._isFirstRender || forceFullRefresh) {
+      log("Loading Vue webview (force:", forceFullRefresh, ")");
+      this._webviewReady = false;
+      this._pendingBoard = this._lastValidBoard ?? null;
+      this._view.webview.html = this.getWebviewHtml(this._view.webview);
+      this._isFirstRender = false;
+    }
+  }
+
+  private postBoardUpdate(board: Board | null) {
+    if (!this._view) return;
+    const payload = {
+      type: "boardUpdate",
+      board,
+      priorityStyles: this.getDynamicPriorityCSS(),
+    };
+
+    if (this._webviewReady) {
+      this._view.webview.postMessage(payload);
+    } else {
+      this._pendingBoard = board;
     }
   }
 
@@ -1768,1689 +1800,64 @@ columns:
     return css;
   }
 
-  private getTasksHtml(board: Board): string {
-    // Calculate progress metrics
-    const totalTasks = board.columns.reduce(
-      (sum, col) => sum + col.tasks.length,
-      0
-    );
-    const doneColumn = board.columns.find((col) => col.id === "done");
-    const doneTasks = doneColumn ? doneColumn.tasks.length : 0;
-    const progressPercent =
-      totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
-
-    // Extract unique filter values from all tasks
-    const allTasks = board.columns.flatMap((col) => col.tasks);
-    const uniqueTags = new Set<string>();
-    const uniqueAssignees = new Set<string>();
-    const uniquePriorities = new Set<string>();
-
-    allTasks.forEach((task) => {
-      if (task.tags) {
-        task.tags.forEach((tag) => uniqueTags.add(tag));
-      }
-      if (task.assignee) {
-        uniqueAssignees.add(task.assignee);
-      }
-      if (task.priority) {
-        uniquePriorities.add(task.priority);
-      }
-    });
-
-    // Sort the unique values
-    const sortedTags = Array.from(uniqueTags).sort();
-    const sortedAssignees = Array.from(uniqueAssignees).sort();
-    const priorityOrder = ["critical", "high", "medium", "low"];
-    const sortedPriorities = Array.from(uniquePriorities).sort((a, b) => {
-      return priorityOrder.indexOf(a) - priorityOrder.indexOf(b);
-    });
-
-    // Generate nonce for CSP
+  private getWebviewHtml(webview: vscode.Webview): string {
     const nonce = this.getNonce();
+    const distPath = path.join(this._extensionUri.fsPath, "media", "webview");
+    const manifestInVite = path.join(distPath, ".vite", "manifest.json");
+    const manifestPath = fs.existsSync(manifestInVite)
+      ? manifestInVite
+      : path.join(distPath, "manifest.json");
 
-    // Get URI for external stylesheet
-    const styleUri = this._view?.webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, 'media', 'board.css')
+    if (!fs.existsSync(manifestPath)) {
+      const message = "Webview assets not found. Run npm run webview:build.";
+      log(message);
+      return `<html><body><p>${message}</p></body></html>`;
+    }
+
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const entry = manifest["index.html"] ?? manifest["src/main.ts"];
+
+    if (!entry || !entry.file) {
+      const message = "Invalid Vite manifest for webview.";
+      log(message);
+      return `<html><body><p>${message}</p></body></html>`;
+    }
+
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, "media", "webview", entry.file)
     );
+
+    const styles = (entry.css ?? []).map((cssPath: string) =>
+      webview.asWebviewUri(
+        vscode.Uri.joinPath(this._extensionUri, "media", "webview", cssPath)
+      )
+    );
+
+    const csp = [
+      `default-src 'none';`,
+      `img-src ${webview.cspSource} https: data:;`,
+      `style-src ${webview.cspSource} 'unsafe-inline';`,
+      `font-src ${webview.cspSource};`,
+      `script-src 'nonce-${nonce}';`,
+    ].join(" ");
+
+    const styleTags = styles
+      .map((href: vscode.Uri) => `<link rel="stylesheet" href="${href}">`)
+      .join("\n");
 
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${
-    this._view?.webview.cspSource
-  } 'unsafe-inline'; script-src 'nonce-${nonce}';">
-  <title>Brainfile Tasks</title>
-  <link rel="stylesheet" href="${styleUri}">
-  <style>
-    /* Dynamic priority colors from settings */
-    ${this.getDynamicPriorityCSS()}
-
-  </style>
+  <meta http-equiv="Content-Security-Policy" content="${csp}">
+  ${styleTags}
 </head>
 <body>
-  <div id="toast" class="toast"></div>
-  <div class="header-top">
-    <div class="board-title-wrapper">
-      <div class="board-title" id="boardTitle">${escapeHtml(
-        board.title
-      )}</div>
-      <button class="title-edit-btn" id="titleEditBtn" title="Edit title">✎</button>
-    </div>
-  </div>
-
-  <div class="tabs">
-    <button class="tab active" data-tab="tasks">
-      Tasks
-      <span class="tab-indicator"></span>
-    </button>
-    <button class="tab" data-tab="rules">
-      Rules
-      <span class="tab-indicator"></span>
-    </button>
-    <button class="tab" data-tab="archive">
-      Archive
-      <span class="tab-indicator"></span>
-    </button>
-    <button class="settings-gear" id="openSettings" title="Open Settings">⚙</button>
-  </div>
-
-  <div class="tab-content active" id="tasksTab">
-    <div class="board-header">
-      <div class="progress-section">
-        <div class="progress-label">
-          <span>Progress</span>
-          <span class="progress-percent">${progressPercent}%</span>
-        </div>
-        <div class="progress-bar">
-          <div class="progress-fill" style="width: ${progressPercent}%"></div>
-        </div>
-      </div>
-
-      <div class="stats">
-        ${generateStatsHtml(board, totalTasks)}
-      </div>
-    </div>
-
-    <!-- Search Section -->
-    <div class="search-section">
-      <div class="search-container">
-        <input type="text"
-               id="searchInput"
-               class="search-input"
-               placeholder="Search tasks..."
-               autocomplete="off">
-        <button id="searchClear" class="search-clear" style="display: none;">×</button>
-      </div>
-    </div>
-
-    ${[...board.columns]
-      .sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity))
-      .map(
-        (col) => `
-      <div class="column-section" data-column-id="${col.id}">
-        <div class="column-header">
-          <div class="column-header-title">
-            <span class="collapse-icon">▼</span>
-            <span>${escapeHtml(col.title)}</span>
-          </div>
-          <div class="column-header-right">
-            <button class="add-task-btn" data-column-id="${
-              col.id
-            }" title="Add task to ${escapeHtml(col.title)}">+</button>
-            <span class="task-count">${col.tasks.length}</span>
-          </div>
-        </div>
-        ${
-          col.tasks.length === 0
-            ? '<div class="empty-state">No tasks</div>'
-            : col.tasks
-                .map(
-                  (task, index) => `
-            <div class="task ${task.priority ? getPriorityClassName(task.priority) : ""}"
-                 data-task-id="${task.id}"
-                 data-column-id="${col.id}"
-                 data-priority="${task.priority || ""}"
-                 data-assignee="${task.assignee || ""}"
-                 data-tags="${
-                   task.tags ? escapeHtml(JSON.stringify(task.tags)) : "[]"
-                 }"
-                 draggable="true">
-              <div class="task-header">
-                <span class="drag-handle">⋮⋮</span>
-                <div class="task-title">${escapeHtml(task.title)}</div>
-                <div class="task-id" data-task-id="${task.id}" title="Click to copy">${task.id}</div>
-                <div class="task-actions">
-                  <button class="task-action edit" data-action="edit" title="Edit">✎</button>
-                  ${
-                    col.id === "done"
-                      ? '<button class="task-action archive" data-action="archive" title="Archive">⬇</button>'
-                      : '<button class="task-action complete" data-action="complete" title="Mark as done">✓</button>'
-                  }
-                  <button class="task-action delete" data-action="delete" title="Delete">×</button>
-                  <div class="agent-split-btn">
-                    <button class="agent-primary" data-action="send-agent-default" title="Send to agent">▷</button>
-                    <button class="agent-dropdown-toggle" data-action="agent-dropdown" title="Choose agent">▾</button>
-                    <div class="agent-dropdown-menu" style="display: none;">
-                      <button class="agent-option" data-agent="copilot">Copilot</button>
-                      ${this.isCursorIDE() ? '<button class="agent-option" data-agent="cursor">Cursor</button>' : ''}
-                      <button class="agent-option" data-agent="claude-code">Claude</button>
-                      <div class="agent-divider"></div>
-                      <button class="agent-option" data-agent="copy">Copy prompt</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div class="task-description">${this.renderMarkdown(
-                task.description || ""
-              )}</div>
-              ${
-                task.priority || task.assignee || (task.tags && task.tags.length > 0)
-                  ? `
-                <div class="task-metadata">
-                  ${task.priority ? `<span class="task-priority-label ${getPriorityClassName(task.priority)}" data-task-id="${task.id}" title="Click to change priority">${escapeHtml(task.priority.toUpperCase())}</span>` : ""}
-                  ${
-                    task.assignee
-                      ? `<span class="task-assignee">${escapeHtml(
-                          task.assignee
-                        )}</span>`
-                      : ""
-                  }
-                  ${
-                    task.tags && task.tags.length > 0
-                      ? task.tags
-                          .map(
-                            (tag) =>
-                              `<span class="task-tag">${escapeHtml(tag)}</span>`
-                          )
-                          .join("")
-                      : ""
-                  }
-                </div>
-              `
-                  : ""
-              }
-              ${
-                task.subtasks && task.subtasks.length > 0
-                  ? `
-                <div class="subtasks-container">
-                  <div class="subtask-progress">
-                    <div class="subtask-progress-bar">
-                      <div class="subtask-progress-fill" style="width: ${getSubtaskProgress(
-                        task.subtasks
-                      )}%"></div>
-                    </div>
-                    <span class="subtask-count">${getCompletedSubtaskCount(
-                      task.subtasks
-                    )}/${task.subtasks.length}</span>
-                  </div>
-                  <ul class="subtask-list">
-                    ${task.subtasks
-                      .map(
-                        (subtask) => `
-                      <li class="subtask-item ${
-                        subtask.completed ? "completed" : ""
-                      }" data-task-id="${task.id}" data-subtask-id="${
-                          subtask.id
-                        }">
-                        <div class="subtask-checkbox"></div>
-                        <span class="subtask-title">${escapeHtml(
-                          subtask.title
-                        )}</span>
-                      </li>
-                    `
-                      )
-                      .join("")}
-                  </ul>
-                </div>
-              `
-                  : ""
-              }
-              ${
-                task.relatedFiles && task.relatedFiles.length > 0
-                  ? `
-                <div class="task-related-files">
-                  ${task.relatedFiles
-                    .map(
-                      (file) => `
-                    <div class="related-file" data-file="${escapeHtml(
-                      file
-                    )}">📄 ${escapeHtml(file)}</div>
-                  `
-                    )
-                    .join("")}
-                </div>
-              `
-                  : ""
-              }
-            </div>
-          `
-                )
-                .join("")
-        }
-      </div>
-    `
-      )
-      .join("")}
-  </div>
-
-  <div class="tab-content" id="rulesTab">
-    ${
-      board.rules
-        ? `
-      <div class="rules-view">
-        <div class="rules-category">
-          <div class="rules-category-header">
-            <div class="rules-category-title">ALWAYS</div>
-            <button class="add-rule-btn" data-rule-type="always" title="Add always rule">+</button>
-          </div>
-          ${
-            board.rules.always && board.rules.always.length > 0
-              ? board.rules.always
-                  .map(
-                    (rule) => `
-            <div class="rule-item-full" data-rule-id="${
-              rule.id
-            }" data-rule-type="always">
-              <div class="rule-number">${rule.id}</div>
-              <div class="rule-text">${escapeHtml(rule.rule)}</div>
-              <div class="rule-actions">
-                <button class="rule-action edit" data-action="edit-rule" title="Edit">✎</button>
-                <button class="rule-action delete" data-action="delete-rule" title="Delete">×</button>
-              </div>
-            </div>
-          `
-                  )
-                  .join("")
-              : '<div class="empty-state">No always rules</div>'
-          }
-        </div>
-
-        <div class="rules-category">
-          <div class="rules-category-header">
-            <div class="rules-category-title">NEVER</div>
-            <button class="add-rule-btn" data-rule-type="never" title="Add never rule">+</button>
-          </div>
-          ${
-            board.rules.never && board.rules.never.length > 0
-              ? board.rules.never
-                  .map(
-                    (rule) => `
-            <div class="rule-item-full" data-rule-id="${
-              rule.id
-            }" data-rule-type="never">
-              <div class="rule-number">${rule.id}</div>
-              <div class="rule-text">${escapeHtml(rule.rule)}</div>
-              <div class="rule-actions">
-                <button class="rule-action edit" data-action="edit-rule" title="Edit">✎</button>
-                <button class="rule-action delete" data-action="delete-rule" title="Delete">×</button>
-              </div>
-            </div>
-          `
-                  )
-                  .join("")
-              : '<div class="empty-state">No never rules</div>'
-          }
-        </div>
-
-        <div class="rules-category">
-          <div class="rules-category-header">
-            <div class="rules-category-title">PREFER</div>
-            <button class="add-rule-btn" data-rule-type="prefer" title="Add prefer rule">+</button>
-          </div>
-          ${
-            board.rules.prefer && board.rules.prefer.length > 0
-              ? board.rules.prefer
-                  .map(
-                    (rule) => `
-            <div class="rule-item-full" data-rule-id="${
-              rule.id
-            }" data-rule-type="prefer">
-              <div class="rule-number">${rule.id}</div>
-              <div class="rule-text">${escapeHtml(rule.rule)}</div>
-              <div class="rule-actions">
-                <button class="rule-action edit" data-action="edit-rule" title="Edit">✎</button>
-                <button class="rule-action delete" data-action="delete-rule" title="Delete">×</button>
-              </div>
-            </div>
-          `
-                  )
-                  .join("")
-              : '<div class="empty-state">No prefer rules</div>'
-          }
-        </div>
-
-        <div class="rules-category">
-          <div class="rules-category-header">
-            <div class="rules-category-title">CONTEXT</div>
-            <button class="add-rule-btn" data-rule-type="context" title="Add context rule">+</button>
-          </div>
-          ${
-            board.rules.context && board.rules.context.length > 0
-              ? board.rules.context
-                  .map(
-                    (rule) => `
-            <div class="rule-item-full" data-rule-id="${
-              rule.id
-            }" data-rule-type="context">
-              <div class="rule-number">${rule.id}</div>
-              <div class="rule-text">${escapeHtml(rule.rule)}</div>
-              <div class="rule-actions">
-                <button class="rule-action edit" data-action="edit-rule" title="Edit">✎</button>
-                <button class="rule-action delete" data-action="delete-rule" title="Delete">×</button>
-              </div>
-            </div>
-          `
-                  )
-                  .join("")
-              : '<div class="empty-state">No context rules</div>'
-          }
-        </div>
-      </div>
-    `
-        : '<div class="empty-state">No rules defined</div>'
-    }
-  </div>
-
-  <div class="tab-content" id="archiveTab">
-    ${
-      board.archive && board.archive.length > 0
-        ? `
-      <div class="archive-view">
-        ${board.archive
-          .map(
-            (task) => `
-          <div class="task archived-task" data-task-id="${task.id}">
-            <div class="task-header">
-              <div class="task-title">${escapeHtml(task.title)}</div>
-            </div>
-            <div class="task-id" data-task-id="${task.id}" title="Click to copy task ID">${task.id}</div>
-            <div class="task-description">${this.renderMarkdown(
-              task.description
-            )}</div>
-            ${
-              task.relatedFiles && task.relatedFiles.length > 0
-                ? `
-              <div class="task-related-files">
-                ${task.relatedFiles
-                  .map(
-                    (file) => `
-                  <div class="related-file" data-file="${escapeHtml(
-                    file
-                  )}">📄 ${escapeHtml(file)}</div>
-                `
-                  )
-                  .join("")}
-              </div>
-            `
-                : ""
-            }
-          </div>
-        `
-          )
-          .join("")}
-      </div>
-    `
-        : '<div class="empty-state">No archived tasks</div>'
-    }
-  </div>
-
-  <script nonce="${nonce}">
-    const vscode = acquireVsCodeApi();
-    const IS_CURSOR = ${this.isCursorIDE()};
-
-    class DragController {
-      constructor(root) {
-        this.root = root;
-        this.dragState = null;
-        this.dropSlot = null;
-        this.activeColumn = null;
-        this.rafId = null;
-        this.pendingRender = null;
-      }
-
-      init() {
-        if (!this.root) return;
-        this.root.addEventListener('dragstart', (e) => this.onDragStart(e));
-        this.root.addEventListener('dragend', () => this.onDragEnd());
-        this.root.addEventListener('dragover', (e) => this.onDragOver(e));
-        this.root.addEventListener('drop', (e) => this.onDrop(e));
-        this.root.addEventListener('dragleave', (e) => this.onDragLeave(e));
-      }
-
-      onDragStart(e) {
-        const task = e.target.closest('.task');
-        if (!task) return;
-        const column = task.closest('.column-section');
-        if (!column) return;
-
-        this.dragState = {
-          taskId: task.dataset.taskId,
-          fromColumnId: task.dataset.columnId
-        };
-
-        task.classList.add('dragging');
-        if (e.dataTransfer) {
-          e.dataTransfer.effectAllowed = 'move';
-          e.dataTransfer.setData('text/plain', task.dataset.taskId || '');
-        }
-        this.setActiveColumn(column);
-      }
-
-      onDragOver(e) {
-        if (!this.dragState) return;
-        const column = e.target.closest('.column-section');
-        if (!column) return;
-
-        e.preventDefault();
-        if (e.dataTransfer) {
-          e.dataTransfer.dropEffect = 'move';
-        }
-
-        this.scheduleRender(column, e.clientY);
-      }
-
-      onDrop(e) {
-        if (!this.dragState) return;
-        const column = e.target.closest('.column-section');
-        if (!column) return;
-
-        e.preventDefault();
-
-        const toIndex = this.getPlannedIndex(column, e.clientY);
-        vscode.postMessage({
-          type: 'moveTask',
-          taskId: this.dragState.taskId,
-          fromColumn: this.dragState.fromColumnId,
-          toColumn: column.dataset.columnId,
-          toIndex: toIndex
-        });
-
-        this.reset();
-      }
-
-      onDragEnd() {
-        this.reset();
-      }
-
-      onDragLeave(e) {
-        if (!this.dragState) return;
-        const related = e.relatedTarget;
-        if (!related || !this.root.contains(related)) {
-          this.clearSlot();
-          this.clearActiveColumn();
-        }
-      }
-
-      scheduleRender(column, y) {
-        this.pendingRender = { column, y };
-        if (this.rafId) return;
-        this.rafId = requestAnimationFrame(() => {
-          this.rafId = null;
-          if (!this.pendingRender) return;
-          const { column: pendingColumn, y: pendingY } = this.pendingRender;
-          this.pendingRender = null;
-          this.renderSlot(pendingColumn, pendingY);
-        });
-      }
-
-      renderSlot(column, y) {
-        const tasks = Array.from(column.querySelectorAll('.task:not(.dragging)'));
-        let index = tasks.length;
-
-        for (let i = 0; i < tasks.length; i++) {
-          const rect = tasks[i].getBoundingClientRect();
-          if (y < rect.top + rect.height / 2) {
-            index = i;
-            break;
-          }
-        }
-
-        this.ensureDropSlot();
-        this.dropSlot.dataset.index = String(index);
-        if (index >= tasks.length) {
-          column.appendChild(this.dropSlot);
-        } else {
-          column.insertBefore(this.dropSlot, tasks[index]);
-        }
-
-        this.setActiveColumn(column);
-      }
-
-      ensureDropSlot() {
-        if (this.dropSlot) return;
-        this.dropSlot = document.createElement('div');
-        this.dropSlot.className = 'drop-slot';
-      }
-
-      getPlannedIndex(column, y) {
-        if (this.dropSlot && this.dropSlot.parentElement === column && this.dropSlot.dataset.index) {
-          const parsed = parseInt(this.dropSlot.dataset.index, 10);
-          if (!Number.isNaN(parsed)) {
-            return parsed;
-          }
-        }
-        return this.getIndexFromY(column, y);
-      }
-
-      getIndexFromY(column, y) {
-        const tasks = Array.from(column.querySelectorAll('.task:not(.dragging)'));
-        for (let i = 0; i < tasks.length; i++) {
-          const rect = tasks[i].getBoundingClientRect();
-          if (y < rect.top + rect.height / 2) {
-            return i;
-          }
-        }
-        return tasks.length;
-      }
-
-      setActiveColumn(column) {
-        if (this.activeColumn === column) return;
-        if (this.activeColumn) {
-          this.activeColumn.classList.remove('drag-target');
-        }
-        this.activeColumn = column;
-        this.activeColumn.classList.add('drag-target');
-      }
-
-      clearActiveColumn() {
-        if (this.activeColumn) {
-          this.activeColumn.classList.remove('drag-target');
-          this.activeColumn = null;
-        }
-      }
-
-      clearSlot() {
-        if (this.dropSlot && this.dropSlot.parentElement) {
-          this.dropSlot.parentElement.removeChild(this.dropSlot);
-        }
-        this.dropSlot = null;
-      }
-
-      clearDraggingClass() {
-        this.root.querySelectorAll('.task.dragging').forEach(task => task.classList.remove('dragging'));
-      }
-
-      reset() {
-        this.clearSlot();
-        this.clearActiveColumn();
-        this.clearDraggingClass();
-        this.dragState = null;
-      }
-    }
-
-    let dragController = null;
-
-    function initDragAndDrop() {
-      const tasksTab = document.getElementById('tasksTab');
-      if (!tasksTab) return;
-      if (!dragController) {
-        dragController = new DragController(tasksTab);
-        dragController.init();
-      } else {
-        dragController.reset();
-      }
-    }
-
-
-    // Search state and logic
-    let searchTerm = '';
-
-    function applySearch() {
-      const tasks = document.querySelectorAll('.task');
-
-      tasks.forEach(task => {
-        let shouldShow = true;
-
-        // Search filter - check title and description
-        if (searchTerm) {
-          const searchLower = searchTerm.toLowerCase();
-          const title = task.querySelector('.task-title')?.textContent?.toLowerCase() || '';
-          const description = task.querySelector('.task-description')?.textContent?.toLowerCase() || '';
-          const tags = task.querySelector('.task-metadata')?.textContent?.toLowerCase() || '';
-
-          if (!title.includes(searchLower) && !description.includes(searchLower) && !tags.includes(searchLower)) {
-            shouldShow = false;
-          }
-        }
-
-        // Apply visibility
-        if (shouldShow) {
-          task.classList.remove('filtered-out');
-        } else {
-          task.classList.add('filtered-out');
-        }
-      });
-
-      // Update column empty states
-      document.querySelectorAll('.column-section').forEach(column => {
-        const visibleTasks = column.querySelectorAll('.task:not(.filtered-out)');
-        const emptyState = column.querySelector('.empty-state');
-
-        if (visibleTasks.length === 0 && column.querySelectorAll('.task').length > 0) {
-          column.classList.add('all-filtered');
-          if (emptyState) {
-            emptyState.style.display = 'block';
-            emptyState.textContent = 'No matching tasks';
-          }
-        } else {
-          column.classList.remove('all-filtered');
-          if (emptyState && column.querySelectorAll('.task').length > 0) {
-            emptyState.style.display = 'none';
-          }
-        }
-      });
-    }
-
-    // Search input handler
-    const searchInput = document.getElementById('searchInput');
-    const searchClear = document.getElementById('searchClear');
-
-    if (searchInput) {
-      searchInput.addEventListener('input', (e) => {
-        searchTerm = e.target.value;
-        searchClear.style.display = e.target.value ? 'block' : 'none';
-        applySearch();
-      });
-    }
-
-    if (searchClear) {
-      searchClear.addEventListener('click', () => {
-        searchInput.value = '';
-        searchTerm = '';
-        searchClear.style.display = 'none';
-        applySearch();
-      });
-    }
-
-    // Task expansion
-    document.querySelectorAll('.task').forEach(taskEl => {
-      taskEl.addEventListener('click', (e) => {
-        if (e.target.closest('.task-action') || e.target.closest('.drag-handle') || e.target.closest('.related-file') || e.target.closest('.subtask-item') || e.target.closest('.task-id') || e.target.closest('.task-priority-label')) {
-          return;
-        }
-        taskEl.classList.toggle('expanded');
-      });
-    });
-
-    // Subtask checkbox clicks
-    document.querySelectorAll('.subtask-item').forEach(subtaskEl => {
-      subtaskEl.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const taskId = subtaskEl.dataset.taskId;
-        const subtaskId = subtaskEl.dataset.subtaskId;
-        vscode.postMessage({
-          type: 'toggleSubtask',
-          taskId: taskId,
-          subtaskId: subtaskId
-        });
-      });
-    });
-
-    // Related file clicks
-    document.querySelectorAll('.related-file').forEach(fileEl => {
-      fileEl.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const filePath = fileEl.dataset.file;
-        if (filePath) {
-          vscode.postMessage({
-            type: 'openFile',
-            filePath: filePath
-          });
-        }
-      });
-    });
-
-    // Edit action - opens task in editor
-    document.querySelectorAll('[data-action="edit"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const taskEl = e.target.closest('.task');
-        const taskId = taskEl.dataset.taskId;
-
-        // Send message to open task in editor
-        vscode.postMessage({
-          type: 'editTask',
-          taskId: taskId
-        });
-      });
-    });
-
-    // Delete action
-    document.querySelectorAll('[data-action="delete"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const taskEl = e.target.closest('.task');
-        const taskId = taskEl.dataset.taskId;
-        const columnId = taskEl.dataset.columnId;
-
-        vscode.postMessage({
-          type: 'deleteTask',
-          columnId: columnId,
-          taskId: taskId
-        });
-      });
-    });
-
-    // Archive action
-    document.querySelectorAll('[data-action="archive"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const taskEl = e.target.closest('.task');
-        const taskId = taskEl.dataset.taskId;
-        const columnId = taskEl.dataset.columnId;
-
-        vscode.postMessage({
-          type: 'archiveTask',
-          columnId: columnId,
-          taskId: taskId
-        });
-      });
-    });
-
-    // Complete action - moves task to done
-    document.querySelectorAll('[data-action="complete"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const taskEl = e.target.closest('.task');
-        const taskId = taskEl.dataset.taskId;
-        const columnId = taskEl.dataset.columnId;
-
-        vscode.postMessage({
-          type: 'completeTask',
-          columnId: columnId,
-          taskId: taskId
-        });
-      });
-    });
-
-    // Agent split button - primary action (send to default agent)
-    document.querySelectorAll('[data-action="send-agent-default"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const taskEl = e.target.closest('.task');
-        const taskId = taskEl.dataset.taskId;
-        vscode.postMessage({
-          type: 'sendToAgent',
-          taskId: taskId
-          // No agentType = use default
-        });
-      });
-    });
-
-    // Agent split button - dropdown toggle
-    document.querySelectorAll('[data-action="agent-dropdown"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const splitBtn = e.target.closest('.agent-split-btn');
-        const menu = splitBtn.querySelector('.agent-dropdown-menu');
-        const isVisible = menu.style.display !== 'none';
-
-        // Close all other dropdowns first
-        document.querySelectorAll('.agent-dropdown-menu').forEach(m => {
-          m.style.display = 'none';
-        });
-
-        if (!isVisible) {
-          menu.style.display = 'block';
-        }
-      });
-    });
-
-    // Agent dropdown options
-    document.querySelectorAll('.agent-option').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const agentType = e.target.dataset.agent;
-        const taskEl = e.target.closest('.task');
-        const taskId = taskEl.dataset.taskId;
-
-        // Close dropdown
-        const menu = e.target.closest('.agent-dropdown-menu');
-        menu.style.display = 'none';
-
-        vscode.postMessage({
-          type: 'sendToAgent',
-          taskId: taskId,
-          agentType: agentType
-        });
-      });
-    });
-
-    // Close dropdown when clicking elsewhere
-    document.addEventListener('click', (e) => {
-      if (!e.target.closest('.agent-split-btn')) {
-        document.querySelectorAll('.agent-dropdown-menu').forEach(m => {
-          m.style.display = 'none';
-        });
-      }
-    });
-
-    // Copy task ID to clipboard
-    function showToast(message) {
-      const toast = document.getElementById('toast');
-      toast.textContent = message;
-      toast.classList.add('show');
-      setTimeout(() => {
-        toast.classList.remove('show');
-      }, 2000);
-    }
-
-    document.querySelectorAll('.task-id').forEach(idEl => {
-      idEl.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const taskId = idEl.dataset.taskId;
-        navigator.clipboard.writeText(taskId).then(() => {
-          showToast('Copied: ' + taskId);
-        }).catch(() => {
-          showToast('Failed to copy');
-        });
-      });
-    });
-
-    // Priority label click to edit
-    document.querySelectorAll('.task-priority-label').forEach(prioEl => {
-      prioEl.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const taskId = prioEl.dataset.taskId;
-        vscode.postMessage({
-          type: 'editPriority',
-          taskId: taskId
-        });
-      });
-    });
-
-    // Drag and drop
-    initDragAndDrop();
-
-    // Add task buttons
-    document.querySelectorAll('.add-task-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const columnId = btn.dataset.columnId;
-        vscode.postMessage({
-          type: 'addTaskToColumn',
-          columnId: columnId
-        });
-      });
-    });
-
-    // Add rule buttons
-    document.querySelectorAll('.add-rule-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const ruleType = btn.dataset.ruleType;
-        vscode.postMessage({
-          type: 'addRule',
-          ruleType: ruleType
-        });
-      });
-    });
-
-    // Edit rule actions - opens rule in editor
-    document.querySelectorAll('[data-action="edit-rule"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const ruleEl = e.target.closest('.rule-item-full');
-        const ruleId = ruleEl.dataset.ruleId;
-        const ruleType = ruleEl.dataset.ruleType;
-
-        vscode.postMessage({
-          type: 'editRule',
-          ruleId: ruleId,
-          ruleType: ruleType
-        });
-      });
-    });
-
-    // Delete rule actions
-    document.querySelectorAll('[data-action="delete-rule"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const ruleEl = e.target.closest('.rule-item-full');
-        const ruleId = ruleEl.dataset.ruleId;
-        const ruleType = ruleEl.dataset.ruleType;
-
-        vscode.postMessage({
-          type: 'deleteRule',
-          ruleId: ruleId,
-          ruleType: ruleType
-        });
-      });
-    });
-
-    // Column collapse/expand
-    document.querySelectorAll('.column-header').forEach(header => {
-      header.addEventListener('click', (e) => {
-        // Don't collapse if clicking on add button
-        if (e.target.closest('.add-task-btn')) {
-          return;
-        }
-        const columnSection = header.closest('.column-section');
-        columnSection.classList.toggle('collapsed');
-      });
-    });
-
-    // Tab switching
-    document.querySelectorAll('.tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        const tabName = tab.dataset.tab;
-
-        // Update tab buttons
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-
-        // Remove change indicator when viewing the tab
-        tab.classList.remove('has-changes');
-
-        // Update tab content
-        document.querySelectorAll('.tab-content').forEach(content => {
-          content.classList.remove('active');
-        });
-        document.getElementById(tabName + 'Tab').classList.add('active');
-      });
-    });
-
-    // Settings gear - open VS Code settings
-    const settingsBtn = document.getElementById('openSettings');
-    if (settingsBtn) {
-      settingsBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        vscode.postMessage({ type: 'openSettings' });
-      });
-    }
-
-    // Title editing
-    let originalTitle = '';
-
-    const editTitle = () => {
-      const titleEl = document.getElementById('boardTitle');
-      originalTitle = titleEl.textContent;
-
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.className = 'settings-input';
-      input.value = originalTitle;
-      input.style.fontSize = '14px';
-      input.style.fontWeight = '600';
-      input.style.padding = '4px 6px';
-
-      titleEl.replaceWith(input);
-      input.focus();
-      input.select();
-
-      const saveTitle = () => {
-        const newTitle = input.value.trim();
-        if (newTitle && newTitle !== originalTitle) {
-          vscode.postMessage({
-            type: 'updateTitle',
-            title: newTitle
-          });
-        }
-
-        const titleDiv = document.createElement('div');
-        titleDiv.className = 'board-title';
-        titleDiv.id = 'boardTitle';
-        titleDiv.textContent = newTitle || originalTitle;
-        titleDiv.addEventListener('click', editTitle);
-
-        input.replaceWith(titleDiv);
-      };
-
-      input.addEventListener('blur', saveTitle);
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          saveTitle();
-        } else if (e.key === 'Escape') {
-          const titleDiv = document.createElement('div');
-          titleDiv.className = 'board-title';
-          titleDiv.id = 'boardTitle';
-          titleDiv.textContent = originalTitle;
-          titleDiv.addEventListener('click', editTitle);
-          input.replaceWith(titleDiv);
-        }
-      });
-    };
-
-    document.getElementById('boardTitle').addEventListener('click', editTitle);
-    document.getElementById('titleEditBtn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      editTitle();
-    });
-
-    // Clear cache button
-    document.getElementById('clearCacheBtn').addEventListener('click', () => {
-      vscode.postMessage({
-        type: 'clearCache'
-      });
-    });
-
-    // Save stats config button
-    const saveStatsBtn = document.getElementById('saveStatsConfig');
-    if (saveStatsBtn) {
-      saveStatsBtn.addEventListener('click', () => {
-        const checkboxes = document.querySelectorAll('.stat-column-checkbox:checked');
-        const selectedColumns = Array.from(checkboxes).map(cb => cb.dataset.columnId);
-
-        vscode.postMessage({
-          type: 'saveStatsConfig',
-          columns: selectedColumns
-        });
-      });
-    }
-
-    // Handle board updates from file changes
-    let previousBoard = ${JSON.stringify(board)};
-
-    window.addEventListener('message', (event) => {
-      const message = event.data;
-
-      try {
-        if (message.type === 'boardUpdate') {
-          console.log('[Brainfile] Received boardUpdate message');
-          const newBoard = message.board;
-          const activeTabEl = document.querySelector('.tab.active');
-          const activeTab = activeTabEl ? activeTabEl.dataset.tab : 'tasks';
-
-          // Clear any parse warnings on successful update
-          const warningBanner = document.getElementById('parseWarningBanner');
-          if (warningBanner) {
-            warningBanner.remove();
-          }
-
-          // Check what changed
-          const tasksChanged = JSON.stringify(newBoard.columns) !== JSON.stringify(previousBoard.columns);
-          const rulesChanged = JSON.stringify(newBoard.rules) !== JSON.stringify(previousBoard.rules);
-
-          // Update indicators if not on active tab
-          const tasksTabEl = document.querySelector('[data-tab="tasks"]');
-          const rulesTabEl = document.querySelector('[data-tab="rules"]');
-          if (activeTab !== 'tasks' && tasksChanged && tasksTabEl) {
-            tasksTabEl.classList.add('has-changes');
-          }
-          if (activeTab !== 'rules' && rulesChanged && rulesTabEl) {
-            rulesTabEl.classList.add('has-changes');
-          }
-
-          // Update the content
-          previousBoard = newBoard;
-
-          // Update title
-          const titleEl = document.getElementById('boardTitle');
-          if (titleEl && titleEl.textContent !== newBoard.title) {
-            titleEl.textContent = newBoard.title;
-          }
-
-          // Rebuild the tabs content (but don't switch tabs)
-          console.log('[Brainfile] Calling updateTabsContent');
-          updateTabsContent(newBoard, activeTab);
-          console.log('[Brainfile] updateTabsContent completed');
-        } else if (message.type === 'parseWarning') {
-          // Show warning banner if not already present
-          let warningBanner = document.getElementById('parseWarningBanner');
-          if (!warningBanner) {
-            warningBanner = document.createElement('div');
-            warningBanner.id = 'parseWarningBanner';
-            warningBanner.style.cssText = 'background: var(--vscode-inputValidation-warningBackground); color: var(--vscode-inputValidation-warningForeground); border: 1px solid var(--vscode-inputValidation-warningBorder); padding: 8px 12px; margin: 8px; border-radius: 4px; font-size: 12px;';
-            warningBanner.textContent = '⚠️ ' + message.message;
-            document.body.insertBefore(warningBanner, document.body.firstChild);
-          }
-        }
-      } catch (error) {
-        console.error('[Brainfile] Error handling message:', error);
-      }
-    });
-
-    function getSubtaskProgress(subtasks) {
-      if (!subtasks || subtasks.length === 0) return 0;
-      const completed = subtasks.filter(st => st.completed).length;
-      return Math.round((completed / subtasks.length) * 100);
-    }
-
-    function getCompletedSubtaskCount(subtasks) {
-      if (!subtasks) return 0;
-      return subtasks.filter(st => st.completed).length;
-    }
-
-    function updateTabsContent(board, activeTab) {
-      try {
-        console.log('[Brainfile] updateTabsContent starting, activeTab:', activeTab);
-        // Store currently expanded tasks before updating
-        const expandedTasks = new Set();
-        document.querySelectorAll('.task.expanded').forEach(task => {
-          expandedTasks.add(task.dataset.taskId);
-        });
-
-        // Store current search state before updating
-      const currentSearchTerm = searchTerm;
-
-      // Update tasks tab
-      const tasksTab = document.getElementById('tasksTab');
-      tasksTab.innerHTML = \`
-        <div class="board-header">
-          <div class="progress-section">
-            <div class="progress-label">
-              <span>Progress</span>
-              <span class="progress-percent">\${calculateProgress(board)}%</span>
-            </div>
-            <div class="progress-bar">
-              <div class="progress-fill" style="width: \${calculateProgress(board)}%"></div>
-            </div>
-          </div>
-
-          <div class="stats">
-            \${getStatsHtmlForUpdate(board)}
-          </div>
-        </div>
-
-        <!-- Search Section -->
-        <div class="search-section">
-          <div class="search-container">
-            <input type="text"
-                   id="searchInput"
-                   class="search-input"
-                   placeholder="Search tasks..."
-                   value="\${currentSearchTerm}"
-                   autocomplete="off">
-            <button id="searchClear" class="search-clear" style="display: \${currentSearchTerm ? 'block' : 'none'};">×</button>
-          </div>
-        </div>
-
-        \${[...board.columns].sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity)).map(col => \`
-          <div class="column-section" data-column-id="\${col.id}">
-            <div class="column-header">
-              <div class="column-header-title">
-                <span class="collapse-icon">▼</span>
-                <span>\${escapeHtml(col.title)}</span>
-              </div>
-              <div class="column-header-right">
-                <button class="add-task-btn" data-column-id="\${col.id}" title="Add task to \${escapeHtml(col.title)}">+</button>
-                <span class="task-count">\${col.tasks.length}</span>
-              </div>
-            </div>
-            \${col.tasks.length === 0
-              ? '<div class="empty-state">No tasks</div>'
-              : col.tasks.map((task, index) => \`
-                <div class="task \${task.priority ? 'priority-' + task.priority.toLowerCase().replace(/[^a-z0-9]/g, '-') : ''}"
-                     data-task-id="\${task.id}"
-                     data-column-id="\${col.id}"
-                     data-priority="\${task.priority || ''}"
-                     data-assignee="\${task.assignee || ''}"
-                     data-tags="\${task.tags ? escapeHtml(JSON.stringify(task.tags)) : '[]'}"
-                     draggable="true">
-                  <div class="task-header">
-                    <span class="drag-handle">⋮⋮</span>
-                    <div class="task-title">\${escapeHtml(task.title)}</div>
-                    <div class="task-id" data-task-id="\${task.id}" title="Click to copy">\${task.id}</div>
-                    <div class="task-actions">
-                      <button class="task-action edit" data-action="edit" title="Edit">✎</button>
-                    \${col.id === 'done' ? '<button class="task-action archive" data-action="archive" title="Archive">⬇</button>' : '<button class="task-action complete" data-action="complete" title="Mark as done">✓</button>'}
-                      <button class="task-action delete" data-action="delete" title="Delete">×</button>
-                      <div class="agent-split-btn">
-                        <button class="agent-primary" data-action="send-agent-default" title="Send to agent">▷</button>
-                        <button class="agent-dropdown-toggle" data-action="agent-dropdown" title="Choose agent">▾</button>
-                        <div class="agent-dropdown-menu" style="display: none;">
-                          <button class="agent-option" data-agent="copilot">Copilot</button>
-                          \${IS_CURSOR ? '<button class="agent-option" data-agent="cursor">Cursor</button>' : ''}
-                          <button class="agent-option" data-agent="claude-code">Claude</button>
-                          <div class="agent-divider"></div>
-                          <button class="agent-option" data-agent="copy">Copy prompt</button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="task-description">\${renderMarkdown(task.description || '')}</div>
-                  \${(task.priority || task.assignee || (task.tags && task.tags.length > 0)) ? \`
-                    <div class="task-metadata">
-                      \${task.priority ? \`<span class="task-priority-label priority-\${task.priority.toLowerCase().replace(/[^a-z0-9]/g, '-')}" data-task-id="\${task.id}" title="Click to change priority">\${escapeHtml(task.priority.toUpperCase())}</span>\` : ''}
-                      \${task.assignee ? \`<span class="task-assignee">\${escapeHtml(task.assignee)}</span>\` : ''}
-                      \${task.tags && task.tags.length > 0 ? task.tags.map(tag =>
-                        \`<span class="task-tag">\${escapeHtml(tag)}</span>\`
-                      ).join('') : ''}
-                    </div>
-                  \` : ''}
-                  \${task.subtasks && task.subtasks.length > 0 ? \`
-                    <div class="subtasks-container">
-                      <div class="subtask-progress">
-                        <div class="subtask-progress-bar">
-                          <div class="subtask-progress-fill" style="width: \${getSubtaskProgress(task.subtasks)}%"></div>
-                        </div>
-                        <span class="subtask-count">\${getCompletedSubtaskCount(task.subtasks)}/\${task.subtasks.length}</span>
-                      </div>
-                      <ul class="subtask-list">
-                        \${task.subtasks.map(subtask => \`
-                          <li class="subtask-item \${subtask.completed ? 'completed' : ''}" data-task-id="\${task.id}" data-subtask-id="\${subtask.id}">
-                            <div class="subtask-checkbox"></div>
-                            <span class="subtask-title">\${escapeHtml(subtask.title)}</span>
-                          </li>
-                        \`).join('')}
-                      </ul>
-                    </div>
-                  \` : ''}
-                  \${task.relatedFiles && task.relatedFiles.length > 0 ? \`
-                    <div class="task-related-files">
-                      \${task.relatedFiles.map(file => \`
-                        <div class="related-file" data-file="\${file}">📄 \${file}</div>
-                      \`).join('')}
-                    </div>
-                  \` : ''}
-                </div>
-              \`).join('')
-            }
-          </div>
-        \`).join('')}
-      \`;
-
-      // Update rules tab
-      const rulesTab = document.getElementById('rulesTab');
-      rulesTab.innerHTML = board.rules ? \`
-        <div class="rules-view">
-          \${board.rules.always && board.rules.always.length > 0 ? \`
-            <div class="rules-category">
-              <div class="rules-category-title">ALWAYS</div>
-              \${board.rules.always.map(rule => \`
-                <div class="rule-item-full">
-                  <div class="rule-number">\${rule.id}</div>
-                  <div class="rule-text">\${escapeHtml(rule.rule)}</div>
-                </div>
-              \`).join('')}
-            </div>
-          \` : ''}
-
-          \${board.rules.never && board.rules.never.length > 0 ? \`
-            <div class="rules-category">
-              <div class="rules-category-title">NEVER</div>
-              \${board.rules.never.map(rule => \`
-                <div class="rule-item-full">
-                  <div class="rule-number">\${rule.id}</div>
-                  <div class="rule-text">\${escapeHtml(rule.rule)}</div>
-                </div>
-              \`).join('')}
-            </div>
-          \` : ''}
-
-          \${board.rules.prefer && board.rules.prefer.length > 0 ? \`
-            <div class="rules-category">
-              <div class="rules-category-title">PREFER</div>
-              \${board.rules.prefer.map(rule => \`
-                <div class="rule-item-full">
-                  <div class="rule-number">\${rule.id}</div>
-                  <div class="rule-text">\${escapeHtml(rule.rule)}</div>
-                </div>
-              \`).join('')}
-            </div>
-          \` : ''}
-
-          \${board.rules.context && board.rules.context.length > 0 ? \`
-            <div class="rules-category">
-              <div class="rules-category-title">CONTEXT</div>
-              \${board.rules.context.map(rule => \`
-                <div class="rule-item-full">
-                  <div class="rule-number">\${rule.id}</div>
-                  <div class="rule-text">\${escapeHtml(rule.rule)}</div>
-                </div>
-              \`).join('')}
-            </div>
-          \` : ''}
-        </div>
-      \` : '<div class="empty-state">No rules defined</div>';
-
-      // Update archive tab
-      const archiveTab = document.getElementById('archiveTab');
-      archiveTab.innerHTML = board.archive && board.archive.length > 0 ? \`
-        <div class="archive-view">
-          \${board.archive.map(task => \`
-            <div class="task archived-task" data-task-id="\${task.id}">
-              <div class="task-header">
-                <div class="task-title">\${escapeHtml(task.title)}</div>
-              </div>
-              <div class="task-id" data-task-id="\${task.id}" title="Click to copy task ID">\${task.id}</div>
-              <div class="task-description">\${renderMarkdown(task.description)}</div>
-              \${task.relatedFiles && task.relatedFiles.length > 0 ? \`
-                <div class="task-related-files">
-                  \${task.relatedFiles.map(file => \`
-                    <div class="related-file" data-file="\${escapeHtml(file)}">📄 \${escapeHtml(file)}</div>
-                  \`).join('')}
-                </div>
-              \` : ''}
-            </div>
-          \`).join('')}
-        </div>
-      \` : '<div class="empty-state">No archived tasks</div>';
-
-      // Re-attach event listeners for tasks
-      attachTaskEventListeners();
-
-      // Re-attach search event listeners
-      attachSearchEventListeners();
-
-      // Restore search state
-      searchTerm = currentSearchTerm;
-
-      // Apply search after restoring state
-      applySearch();
-
-      // Restore expanded state
-      expandedTasks.forEach(taskId => {
-        const taskEl = document.querySelector(\`.task[data-task-id="\${taskId}"]\`);
-        if (taskEl) {
-          taskEl.classList.add('expanded');
-        }
-      });
-        console.log('[Brainfile] updateTabsContent completed successfully');
-      } catch (error) {
-        console.error('[Brainfile] Error in updateTabsContent:', error);
-      }
-    }
-
-    function calculateProgress(board) {
-      const total = board.columns.reduce((sum, col) => sum + col.tasks.length, 0);
-      const done = board.columns.find(col => col.id === 'done')?.tasks.length || 0;
-      return total > 0 ? Math.round((done / total) * 100) : 0;
-    }
-
-    function getTotalTasks(board) {
-      return board.columns.reduce((sum, col) => sum + col.tasks.length, 0);
-    }
-
-    function getDoneTasks(board) {
-      return board.columns.find(col => col.id === 'done')?.tasks.length || 0;
-    }
-
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
-
-    function renderMarkdown(text) {
-      if (!text) return '';
-      // Basic markdown rendering - you might want to use a library like marked for full support
-      return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')
-        .replace(/\\*(.+?)\\*/g, '<em>$1</em>')
-        .replace(/\\n/g, '<br>');
-    }
-
-    function getStatsHtmlForUpdate(board) {
-      const totalTasks = getTotalTasks(board);
-
-      // Check if custom stat columns are configured
-      if (board.statsConfig?.columns && board.statsConfig.columns.length > 0) {
-        // Use configured columns (max 4)
-        const statColumns = board.statsConfig.columns.slice(0, 4);
-        return statColumns.map(columnId => {
-          const column = board.columns.find(col => col.id === columnId);
-          if (column) {
-            return \`
-              <div class="stat">
-                <div class="stat-value">\${column.tasks.length}</div>
-                <div class="stat-label">\${escapeHtml(column.title)}</div>
-              </div>
-            \`;
-          }
-          return '';
-        }).join('');
-      } else {
-        // Default: Total and Done
-        const doneTasks = getDoneTasks(board);
-        return \`
-          <div class="stat">
-            <div class="stat-value">\${totalTasks}</div>
-            <div class="stat-label">Total</div>
-          </div>
-          <div class="stat">
-            <div class="stat-value">\${doneTasks}</div>
-            <div class="stat-label">Done</div>
-          </div>
-        \`;
-      }
-    }
-
-    function attachTaskEventListeners() {
-      // Re-attach all task-related event listeners
-      document.querySelectorAll('.task').forEach(taskEl => {
-        taskEl.addEventListener('click', (e) => {
-          if (e.target.closest('.task-action') || e.target.closest('.drag-handle') || e.target.closest('.related-file') || e.target.closest('.subtask-item') || e.target.closest('.task-id') || e.target.closest('.task-priority-label')) {
-            return;
-          }
-          taskEl.classList.toggle('expanded');
-        });
-      });
-
-      // Re-attach task-id copy clicks
-      document.querySelectorAll('.task-id').forEach(idEl => {
-        idEl.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const taskId = idEl.dataset.taskId;
-          navigator.clipboard.writeText(taskId).then(() => {
-            showToast('Copied: ' + taskId);
-          }).catch(() => {
-            showToast('Failed to copy');
-          });
-        });
-      });
-
-      // Re-attach priority label clicks
-      document.querySelectorAll('.task-priority-label').forEach(prioEl => {
-        prioEl.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const taskId = prioEl.dataset.taskId;
-          vscode.postMessage({
-            type: 'editPriority',
-            taskId: taskId
-          });
-        });
-      });
-
-      // Re-attach subtask clicks
-      document.querySelectorAll('.subtask-item').forEach(subtaskEl => {
-        subtaskEl.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const taskId = subtaskEl.dataset.taskId;
-          const subtaskId = subtaskEl.dataset.subtaskId;
-          vscode.postMessage({
-            type: 'toggleSubtask',
-            taskId: taskId,
-            subtaskId: subtaskId
-          });
-        });
-      });
-
-      // Related file clicks
-      document.querySelectorAll('.related-file').forEach(fileEl => {
-        fileEl.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const filePath = fileEl.dataset.file;
-          if (filePath) {
-            vscode.postMessage({
-              type: 'openFile',
-              filePath: filePath
-            });
-          }
-        });
-      });
-
-      // Re-attach edit actions - opens task in editor
-      document.querySelectorAll('[data-action="edit"]').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const taskEl = e.target.closest('.task');
-          const taskId = taskEl.dataset.taskId;
-
-          // Send message to open task in editor
-          vscode.postMessage({
-            type: 'editTask',
-            taskId: taskId
-          });
-        });
-      });
-
-      document.querySelectorAll('[data-action="delete"]').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const taskEl = e.target.closest('.task');
-          const taskId = taskEl.dataset.taskId;
-          const columnId = taskEl.dataset.columnId;
-
-          vscode.postMessage({
-            type: 'deleteTask',
-            columnId: columnId,
-            taskId: taskId
-          });
-        });
-      });
-
-      // Archive action
-      document.querySelectorAll('[data-action="archive"]').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const taskEl = e.target.closest('.task');
-          const taskId = taskEl.dataset.taskId;
-          const columnId = taskEl.dataset.columnId;
-
-          vscode.postMessage({
-            type: 'archiveTask',
-            columnId: columnId,
-            taskId: taskId
-          });
-        });
-      });
-
-      // Complete action - moves task to done
-      document.querySelectorAll('[data-action="complete"]').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const taskEl = e.target.closest('.task');
-          const taskId = taskEl.dataset.taskId;
-          const columnId = taskEl.dataset.columnId;
-
-          vscode.postMessage({
-            type: 'completeTask',
-            columnId: columnId,
-            taskId: taskId
-          });
-        });
-      });
-
-      // Agent split button - primary action (send to default agent)
-      document.querySelectorAll('[data-action="send-agent-default"]').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const taskEl = e.target.closest('.task');
-          const taskId = taskEl.dataset.taskId;
-          vscode.postMessage({
-            type: 'sendToAgent',
-            taskId: taskId
-          });
-        });
-      });
-
-      // Agent split button - dropdown toggle
-      document.querySelectorAll('[data-action="agent-dropdown"]').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const splitBtn = e.target.closest('.agent-split-btn');
-          const menu = splitBtn.querySelector('.agent-dropdown-menu');
-          const isVisible = menu.style.display !== 'none';
-          document.querySelectorAll('.agent-dropdown-menu').forEach(m => {
-            m.style.display = 'none';
-          });
-          if (!isVisible) {
-            menu.style.display = 'block';
-          }
-        });
-      });
-
-      // Agent dropdown options
-      document.querySelectorAll('.agent-option').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const agentType = e.target.dataset.agent;
-          const taskEl = e.target.closest('.task');
-          const taskId = taskEl.dataset.taskId;
-          const menu = e.target.closest('.agent-dropdown-menu');
-          menu.style.display = 'none';
-          vscode.postMessage({
-            type: 'sendToAgent',
-            taskId: taskId,
-            agentType: agentType
-          });
-        });
-      });
-
-      // Re-attach add task buttons
-      document.querySelectorAll('.add-task-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const columnId = btn.dataset.columnId;
-          vscode.postMessage({
-            type: 'addTaskToColumn',
-            columnId: columnId
-          });
-        });
-      });
-
-      // Re-attach column collapse listeners
-      document.querySelectorAll('.column-header').forEach(header => {
-        header.addEventListener('click', (e) => {
-          // Don't collapse if clicking on add button
-          if (e.target.closest('.add-task-btn')) {
-            return;
-          }
-          const columnSection = header.closest('.column-section');
-          columnSection.classList.toggle('collapsed');
-        });
-      });
-
-      // Reset drag and drop state
-      initDragAndDrop();
-    }
-
-    function attachSearchEventListeners() {
-      // Search input handler
-      const searchInput = document.getElementById('searchInput');
-      const searchClear = document.getElementById('searchClear');
-
-      if (searchInput) {
-        searchInput.addEventListener('input', (e) => {
-          searchTerm = e.target.value;
-          searchClear.style.display = e.target.value ? 'block' : 'none';
-          applySearch();
-        });
-      }
-
-      if (searchClear) {
-        searchClear.addEventListener('click', () => {
-          searchInput.value = '';
-          searchTerm = '';
-          searchClear.style.display = 'none';
-          applySearch();
-        });
-      }
-    }
-  </script>
+  <div id="app"></div>
+  <script type="module" nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
-  }
-
-  private renderMarkdown(text: string | undefined): string {
-    if (!text) return "";
-
-    // Configure marked for safe rendering
-    marked.setOptions({
-      breaks: true,
-      gfm: true,
-    });
-
-    // Parse markdown and sanitize
-    const html = marked.parse(text) as string;
-    return html;
   }
 
   public dispose() {

@@ -5,6 +5,18 @@ All notable changes to the Brainfile VSCode extension will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2025-11-22
+
+### Added
+- Vue 3 + Vite webview in `webview-ui/` with Pinia state store and VS Code messaging composable
+- New `webviewReady` handshake plus `boardUpdate` payloads that include priority styles from settings
+- Vite manifest-driven loader and hashed assets in `media/webview`
+
+### Changed
+- `boardViewProvider.ts` now streams board updates to the Vue app instead of regenerating inline HTML
+- Build scripts run `webview:build` before `compile`/`package`; `.vscodeignore` excludes webview sources from the vsix
+- README documents the split architecture and webview build workflow
+
 ## [0.7.4] - 2025-11-22
 
 ### Added
@@ -127,4 +139,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.4.4]: https://github.com/brainfile/vscode/compare/v0.4.0...v0.4.4
 [0.4.0]: https://github.com/brainfile/vscode/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/brainfile/vscode/releases/tag/v0.3.0
-

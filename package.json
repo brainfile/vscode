@@ -2,7 +2,7 @@
   "name": "brainfile",
   "displayName": "Brainfile",
   "description": "Protocol-first task management for AI-assisted development. Visual kanban board for brainfile.md files.",
-  "version": "0.7.4",
+  "version": "0.8.0",
   "publisher": "brainfile",
   "license": "MIT",
   "icon": "icon.png",
@@ -167,16 +167,18 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
-    "compile": "npm run check-types && node esbuild.js",
+    "compile": "npm run webview:build && npm run check-types && node esbuild.js",
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "npm run check-types && node esbuild.js --production",
+    "package": "npm run webview:build && npm run check-types && node esbuild.js --production",
     "check-types": "tsc --noEmit",
     "lint": "eslint src --ext ts",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "webview:build": "npm --prefix webview-ui run build",
+    "webview:dev": "npm --prefix webview-ui run dev -- --host --port 4173"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",

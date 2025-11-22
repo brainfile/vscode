@@ -12,14 +12,15 @@ import type { WebviewToExtensionMessage } from "../types";
 describe("board/messages", () => {
   describe("WEBVIEW_MESSAGE_TYPES", () => {
     it("contains all expected message types", () => {
+      expect(WEBVIEW_MESSAGE_TYPES.WEBVIEW_READY).toBe("webviewReady");
       expect(WEBVIEW_MESSAGE_TYPES.UPDATE_TASK).toBe("updateTask");
       expect(WEBVIEW_MESSAGE_TYPES.MOVE_TASK).toBe("moveTask");
       expect(WEBVIEW_MESSAGE_TYPES.DELETE_TASK).toBe("deleteTask");
       expect(WEBVIEW_MESSAGE_TYPES.SEND_TO_AGENT).toBe("sendToAgent");
     });
 
-    it("has 21 message types", () => {
-      expect(Object.keys(WEBVIEW_MESSAGE_TYPES)).toHaveLength(21);
+    it("has 22 message types", () => {
+      expect(Object.keys(WEBVIEW_MESSAGE_TYPES)).toHaveLength(22);
     });
   });
 
@@ -73,6 +74,7 @@ describe("board/messages", () => {
   describe("validateMessage", () => {
     it("returns true for valid messages", () => {
       expect(validateMessage({ type: "refresh" })).toBe(true);
+      expect(validateMessage({ type: "webviewReady" })).toBe(true);
       expect(validateMessage({ type: "clearCache" })).toBe(true);
       expect(validateMessage({ type: "moveTask", taskId: "t1", fromColumn: "a", toColumn: "b", toIndex: 0 })).toBe(true);
     });
@@ -110,6 +112,7 @@ describe("board/messages", () => {
       expect(getMissingFields({ type: "openSettings" })).toEqual([]);
       expect(getMissingFields({ type: "fix-issues" })).toEqual([]);
       expect(getMissingFields({ type: "getAvailableAgents" })).toEqual([]);
+      expect(getMissingFields({ type: "webviewReady" })).toEqual([]);
     });
 
     it("identifies missing fields for updateTask", () => {

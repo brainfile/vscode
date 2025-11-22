@@ -36,6 +36,7 @@ export const AGENT_LABELS: Record<AgentType, string> = {
 
 /** Messages sent FROM webview TO extension */
 export type WebviewToExtensionMessage =
+  | { type: "webviewReady" }
   | { type: "updateTask"; columnId: string; taskId: string; title: string; description: string }
   | { type: "editTask"; taskId: string }
   | { type: "editPriority"; taskId: string }
@@ -62,7 +63,7 @@ export type WebviewToExtensionMessage =
 export type ExtensionToWebviewMessage =
   | { type: "agentsDetected"; agents: DetectedAgent[]; defaultAgent: AgentType; lastUsed: AgentType }
   | { type: "parseWarning"; message: string }
-  | { type: "boardUpdate"; board: Board };
+  | { type: "boardUpdate"; board: Board | null; priorityStyles?: string };
 
 /** Rule types for agent instructions */
 export type RuleType = "always" | "never" | "prefer" | "context";
