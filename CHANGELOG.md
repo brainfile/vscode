@@ -8,8 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.7.2] - 2025-11-21
 
 ### Fixed
-- Removed debug flag that was forcing full HTML refresh on every update
-- Improved performance by restoring postMessage-based incremental updates
+- Simplified update mechanism to use reliable full HTML refresh
+- Removed experimental postMessage update path that caused real-time update failures
 
 ## [0.7.1] - 2025-11-21
 

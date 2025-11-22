@@ -661,23 +661,11 @@ columns:
         });
       });
 
-      // On first load or forced refresh, set the full HTML
-      if (this._isFirstRender || forceFullRefresh) {
-        log("Setting full HTML (firstRender:", this._isFirstRender, "forceRefresh:", forceFullRefresh, ")");
-        this._view.webview.html = this.getTasksHtml(board);
-        this._isFirstRender = false;
-      } else {
-        // On subsequent updates, use postMessage to preserve state
-        log("Sending board update via postMessage, view visible:", this._view.visible);
-        this._view.webview.postMessage({
-          type: "boardUpdate",
-          board: board,
-        }).then((success) => {
-          log("postMessage result:", success);
-        }, (err) => {
-          log("postMessage error:", err);
-        });
-      }
+      // Always use full HTML refresh for reliable updates
+      // TODO: Investigate postMessage-based incremental updates for better state preservation
+      log("Setting full HTML (firstRender:", this._isFirstRender, "forceRefresh:", forceFullRefresh, ")");
+      this._view.webview.html = this.getTasksHtml(board);
+      this._isFirstRender = false;
     } catch (error) {
       log("Error updating view:", error);
       vscode.window.showErrorMessage("Failed to update Brainfile board view");
