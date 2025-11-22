@@ -5,6 +5,24 @@ All notable changes to the Brainfile VSCode extension will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2025-11-21
+
+### Fixed
+- Removed debug flag that was forcing full HTML refresh on every update
+- Improved performance by restoring postMessage-based incremental updates
+
+## [0.7.1] - 2025-11-21
+
+### Fixed
+- Fixed drag-and-drop event bubbling causing tasks to move to wrong position
+- Fixed CodeLens actions not updating file in editor in real-time
+- Fixed archive button not updating board view immediately
+- Fixed priority label click handler not working
+
+### Changed
+- Added Output channel logging for debugging
+- Improved error handling in webview message handler
+
 ## [0.6.0] - 2025-11-20
 
 ### Added

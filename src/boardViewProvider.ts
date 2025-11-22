@@ -662,10 +662,8 @@ columns:
       });
 
       // On first load or forced refresh, set the full HTML
-      // DEBUG: Always do full refresh to diagnose postMessage issue
-      const shouldForceRefresh = true; // Set to false to use postMessage updates
-      if (this._isFirstRender || forceFullRefresh || shouldForceRefresh) {
-        log("Setting full HTML (firstRender:", this._isFirstRender, "forceRefresh:", forceFullRefresh, "debug:", shouldForceRefresh, ")");
+      if (this._isFirstRender || forceFullRefresh) {
+        log("Setting full HTML (firstRender:", this._isFirstRender, "forceRefresh:", forceFullRefresh, ")");
         this._view.webview.html = this.getTasksHtml(board);
         this._isFirstRender = false;
       } else {
