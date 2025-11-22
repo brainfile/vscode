@@ -52,18 +52,6 @@ const priorityClass = computed(() =>
 
 const dropdownOpen = ref(false);
 
-function onDragStart(event: DragEvent) {
-  const dataTransfer = event.dataTransfer;
-  if (!dataTransfer) return;
-
-  dataTransfer.setData(
-    "application/json",
-    JSON.stringify({ taskId: props.task.id, fromColumnId: props.columnId })
-  );
-  dataTransfer.setData("text/plain", props.task.id);
-  dataTransfer.effectAllowed = "move";
-}
-
 async function copyTaskId() {
   try {
     await navigator.clipboard.writeText(props.task.id);
@@ -88,14 +76,11 @@ function selectAgent(agent: AgentType) {
   <div
     class="task"
     :class="[priorityClass, { expanded }]"
-    draggable="true"
     :data-task-id="task.id"
     :data-column-id="columnId"
     :data-priority="task.priority || ''"
     :data-assignee="task.assignee || ''"
     :data-tags="task.tags ? JSON.stringify(task.tags) : '[]'"
-    @dragstart="onDragStart"
-    @click="expanded = !expanded"
   >
     <div class="task-header">
       <span class="drag-handle"><GripVertical :size="14" /></span>
