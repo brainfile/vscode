@@ -451,22 +451,12 @@ body {
   background: var(--vscode-list-inactiveSelectionBackground);
 }
 
-.task.dragging {
-  opacity: 0.5;
+.sortable-ghost {
+  opacity: 0.4;
 }
 
-.column-section.drag-target {
-  background: var(--vscode-list-hoverBackground);
-}
-
-.drop-slot {
-  height: 4px;
-  margin: 6px 12px;
-  border-radius: 999px;
-  background: var(--vscode-focusBorder);
-  box-shadow: 0 0 0 1px var(--vscode-panel-border);
-  pointer-events: none;
-  transition: background 120ms ease, box-shadow 120ms ease;
+.sortable-chosen {
+  background: var(--vscode-list-inactiveSelectionBackground);
 }
 
 .task-header {
