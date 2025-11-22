@@ -76,6 +76,7 @@ function selectAgent(agent: AgentType) {
   <div
     class="task"
     :class="[priorityClass, { expanded }]"
+    @click="expanded = !expanded"
     :data-task-id="task.id"
     :data-column-id="columnId"
     :data-priority="task.priority || ''"
