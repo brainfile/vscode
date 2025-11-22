@@ -70,6 +70,7 @@ function handleChange(evt: any) {
         group="tasks"
         :data-column-id="column.id"
         :animation="150"
+        handle=".drag-handle"
         @change="handleChange"
       >
         <template #item="{ element }">
