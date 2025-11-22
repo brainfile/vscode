@@ -103,7 +103,6 @@ function handleChange(evt: any) {
         :list="tasks"
         item-key="id"
         group="tasks"
-        :handle="'.drag-handle'"
         :data-column-id="column.id"
         :animation="150"
         @change="handleChange"
