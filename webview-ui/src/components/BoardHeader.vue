@@ -1,184 +1,106 @@
 <script setup lang="ts">
 defineProps<{
-  title: string;
   progress: number;
   totalTasks: number;
   doneTasks: number;
 }>();
-
-defineEmits<{
-  (e: "edit-title"): void;
-  (e: "refresh"): void;
-  (e: "open-settings"): void;
-}>();
 </script>
 
 <template>
-  <header class="board-header">
-    <div class="title-block">
-      <div>
-        <p class="eyebrow">Brainfile Board</p>
-        <h1 class="title">{{ title }}</h1>
+  <div class="board-header">
+    <div class="progress-section">
+      <div class="progress-label">
+        <span>Progress</span>
+        <span class="progress-percent">{{ progress }}%</span>
       </div>
-      <div class="actions">
-        <button class="ghost" title="Edit title" @click="$emit('edit-title')">
-          ✏️ Rename
-        </button>
-        <button class="ghost" title="Open settings" @click="$emit('open-settings')">
-          ⚙️ Settings
-        </button>
-        <button class="primary" title="Refresh" @click="$emit('refresh')">
-          ⟳ Refresh
-        </button>
+      <div class="progress-bar">
+        <div class="progress-fill" :style="{ width: `${progress}%` }"></div>
       </div>
     </div>
 
-    <div class="summary">
-      <div class="progress">
-        <div class="progress-label">
-          <span>Progress</span>
-          <span class="value">{{ progress }}%</span>
-        </div>
-        <div class="progress-bar">
-          <div class="fill" :style="{ width: `${progress}%` }"></div>
-        </div>
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-value">{{ totalTasks }}</div>
+        <div class="stat-label">TOTAL</div>
       </div>
-      <div class="stat-chip">
-        <span class="label">Total</span>
-        <span class="count">{{ totalTasks }}</span>
-      </div>
-      <div class="stat-chip success">
-        <span class="label">Done</span>
-        <span class="count">{{ doneTasks }}</span>
+      <div class="stat">
+        <div class="stat-value">{{ doneTasks }}</div>
+        <div class="stat-label">DONE</div>
       </div>
     </div>
-  </header>
+  </div>
 </template>
 
 <style scoped>
 .board-header {
-  padding: 16px 12px 12px;
+  padding: 0 0 12px 0;
   border-bottom: 1px solid var(--vscode-panel-border);
-  background: var(--vscode-sideBarSectionHeader-background);
+  background: var(--vscode-sideBar-background);
 }
 
-.title-block {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 8px;
-}
-
-.eyebrow {
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  font-size: 11px;
-  color: var(--vscode-descriptionForeground);
-  margin: 0 0 4px;
-}
-
-.title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--vscode-editor-foreground);
-  letter-spacing: -0.01em;
-}
-
-.actions {
-  display: inline-flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.actions button {
-  border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
-  cursor: pointer;
-  font-weight: 600;
-  padding: 6px 10px;
-  border-radius: 4px;
-  background: var(--vscode-button-secondaryBackground);
-  color: var(--vscode-button-secondaryForeground);
-  transition: background 0.15s, color 0.15s;
-}
-
-.actions button:hover {
-  background: var(--vscode-toolbar-hoverBackground);
-  color: var(--vscode-foreground);
-}
-
-.summary {
-  display: grid;
-  grid-template-columns: 1fr repeat(2, minmax(120px, 1fr));
-  gap: 10px;
-  align-items: center;
-}
-
-.progress {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.progress-section {
+  margin-top: 8px;
 }
 
 .progress-label {
   display: flex;
   justify-content: space-between;
-  color: var(--vscode-descriptionForeground);
-  font-weight: 600;
-  font-size: 12px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--vscode-editor-foreground);
+  opacity: 0.7;
+  margin-bottom: 6px;
 }
 
-.progress-label .value {
+.progress-percent {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+  font-size: 13px;
   color: var(--vscode-editor-foreground);
+  opacity: 0.95;
 }
 
 .progress-bar {
   height: 6px;
-  border-radius: 3px;
   background: var(--vscode-input-background);
+  border-radius: 3px;
   overflow: hidden;
-  border: 1px solid var(--vscode-panel-border);
 }
 
-.progress-bar .fill {
+.progress-fill {
   height: 100%;
   background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-  transition: width 200ms ease;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 3px;
 }
 
-.stat-chip {
-  padding: 10px;
-  border-radius: 6px;
+.stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.stat {
+  flex: 1;
+  padding: 8px;
   background: var(--vscode-input-background);
+  border-radius: 6px;
   border: 1px solid var(--vscode-panel-border);
 }
 
-.stat-chip.success {
-  border-color: var(--vscode-testing-iconPassed);
-}
-
-.label {
-  display: block;
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-  margin-bottom: 4px;
-}
-
-.count {
-  font-weight: 700;
-  font-size: 16px;
+.stat-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 20px;
+  font-weight: 600;
   color: var(--vscode-editor-foreground);
 }
 
-@media (max-width: 820px) {
-  .title-block {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .summary {
-    grid-template-columns: 1fr;
-  }
+.stat-label {
+  font-size: 10px;
+  color: var(--vscode-editor-foreground);
+  opacity: 0.6;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
 }
 </style>

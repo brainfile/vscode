@@ -64,19 +64,19 @@ function onDrop(event: DragEvent, targetTaskId?: string) {
 </script>
 
 <template>
-  <article class="column" :class="{ collapsed }" @dragover.prevent @drop="onDrop($event)">
-    <header class="column__header" @click="emit('toggle-collapse')">
-      <div class="title">
-        <span class="chevron">{{ collapsed ? "▸" : "▾" }}</span>
+  <div class="column-section" :class="{ collapsed }" @dragover.prevent @drop="onDrop($event)">
+    <div class="column-header" @click="emit('toggle-collapse')">
+      <div class="column-header-title">
+        <span class="collapse-icon">▼</span>
         <span>{{ column.title }}</span>
       </div>
-      <div class="meta">
-        <span class="count">{{ totalCount }}</span>
-        <button class="icon" title="Add task" @click.stop="emit('add-task')">＋</button>
+      <div class="column-header-right">
+        <button class="add-task-btn" :data-column-id="column.id" title="Add task" @click.stop="emit('add-task')">+</button>
+        <span class="task-count">{{ totalCount }}</span>
       </div>
-    </header>
+    </div>
 
-    <div v-show="!collapsed" class="tasks">
+    <div v-if="!collapsed">
       <div
         v-for="task in tasks"
         :key="task.id"
@@ -101,95 +101,11 @@ function onDrop(event: DragEvent, targetTaskId?: string) {
         />
       </div>
 
-      <div v-if="tasks.length === 0" class="empty">
-        <p>No tasks in this column.</p>
+      <div v-if="tasks.length === 0" class="empty-state">
+        No tasks
       </div>
     </div>
-  </article>
+  </div>
 </template>
 
-<style scoped>
-.column {
-  border-bottom: 1px solid var(--vscode-panel-border);
-}
-
-.column__header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  cursor: pointer;
-  padding: 10px 0;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  color: var(--vscode-editor-foreground);
-  opacity: 0.9;
-}
-
-.column__header:hover {
-  background: var(--vscode-list-hoverBackground);
-}
-
-.title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 700;
-  color: #f6f7fb;
-}
-
-.chevron {
-  font-size: 12px;
-  opacity: 0.7;
-}
-
-.meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.count {
-  font-size: 11px;
-  opacity: 0.8;
-  font-family: 'JetBrains Mono', monospace;
-}
-
-.icon {
-  border: none;
-  background: transparent;
-  color: var(--vscode-descriptionForeground);
-  padding: 2px 6px;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0;
-}
-
-.column__header:hover .icon {
-  opacity: 0.7;
-}
-
-.icon:hover {
-  background: var(--vscode-toolbar-hoverBackground);
-  opacity: 1 !important;
-}
-
-.tasks {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-bottom: 8px;
-}
-
-.task-wrapper {
-  border-radius: 6px;
-}
-
-.empty {
-  color: #9ba3b4;
-  padding: 10px;
-  text-align: center;
-  border: 1px dashed rgba(255, 255, 255, 0.1);
-  border-radius: 10px;
-}
-</style>
+<style scoped></style>

@@ -13,7 +13,6 @@ const store = useBoardStore();
 const {
   board,
   filteredColumns,
-  filterOptions,
   filters,
   parseWarning,
   availableAgents,
@@ -61,7 +60,7 @@ const stats = computed(() => {
 
 function handleTitleEdit() {
   if (!board.value) return;
-  const updated = prompt("Update board title", board.value.title);
+  const updated = prompt("Enter new board title", board.value.title);
   if (updated && updated.trim() && updated.trim() !== board.value.title) {
     store.updateTitle(updated.trim());
   }
@@ -125,15 +124,12 @@ function handleAgent(payload: { taskId: string; agentType?: string }) {
 
 <template>
   <div class="app-shell">
-    <BoardHeader
-      :title="board?.title ?? 'Brainfile'"
-      :progress="stats.progress"
-      :total-tasks="stats.total"
-      :done-tasks="stats.done"
-      @edit-title="handleTitleEdit"
-      @refresh="store.refresh"
-      @open-settings="store.openSettings"
-    />
+    <div class="header-top">
+      <div class="board-title-wrapper">
+        <div class="board-title" id="boardTitle">{{ board?.title ?? "Brainfile" }}</div>
+        <button class="title-edit-btn" id="titleEditBtn" title="Edit title" @click="handleTitleEdit">✎</button>
+      </div>
+    </div>
 
     <div v-if="parseWarning" class="banner warning">
       <div class="banner__text">{{ parseWarning }}</div>
@@ -167,9 +163,14 @@ function handleAgent(payload: { taskId: string; agentType?: string }) {
     </div>
 
     <section v-if="activeTab === 'tasks'" class="panel">
+      <BoardHeader
+        :progress="stats.progress"
+        :total-tasks="stats.total"
+        :done-tasks="stats.done"
+      />
+
       <SearchFilter
         :filters="filters"
-        :options="filterOptions"
         @update:filters="handleFiltersUpdate"
         @reset="store.resetFilters"
       />
