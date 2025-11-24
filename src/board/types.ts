@@ -4,31 +4,37 @@
  */
 
 import type { Board, Task, LintResult } from "@brainfile/core";
+import { AGENT_PROVIDERS } from "./agents/providers";
 
 // =============================================================================
-// Agent Types
+// Agent Types (manifest-driven)
 // =============================================================================
 
-/** Supported AI agent types for "Send to Agent" feature */
-export type AgentType = "copilot" | "cursor" | "claude-code" | "copy";
+/** Agent ID type - derived from the provider manifest */
+export type AgentId = string;
 
-/** Agent detection result */
+/** @deprecated Use AgentId instead */
+export type AgentType = AgentId;
+
+/** Information about a detected agent */
 export interface DetectedAgent {
-  type: AgentType;
+  id: string;
+  type: string; // Same as id, for webview compatibility
   label: string;
   available: boolean;
+  priority: number;
 }
 
-/** All supported agent types as array (useful for iteration/validation) */
-export const AGENT_TYPES: AgentType[] = ["copilot", "cursor", "claude-code", "copy"];
+/** All supported agent IDs (derived from manifest) */
+export const AGENT_IDS: string[] = AGENT_PROVIDERS.map((p) => p.id);
 
-/** Agent display labels */
-export const AGENT_LABELS: Record<AgentType, string> = {
-  copilot: "Copilot",
-  cursor: "Cursor",
-  "claude-code": "Claude",
-  copy: "Copy",
-};
+/** @deprecated Use AGENT_IDS instead */
+export const AGENT_TYPES = AGENT_IDS;
+
+/** Agent display labels (derived from manifest) */
+export const AGENT_LABELS: Record<string, string> = Object.fromEntries(
+  AGENT_PROVIDERS.map((p) => [p.id, p.label])
+);
 
 // =============================================================================
 // Message Types (Webview <-> Extension communication)

@@ -3,9 +3,11 @@ import type { Board, Task } from "@brainfile/core";
 import { defineStore } from "pinia";
 import type {
   AgentType,
+  ColumnSortState,
   DetectedAgent,
   FilterOptions,
   FiltersState,
+  SortField,
   WebviewToExtensionMessage,
 } from "../types";
 import { useVSCodeApi } from "../composables/useVSCodeApi";
@@ -47,6 +49,54 @@ function matchesFilter(task: Task, filters: FiltersState): boolean {
   return true;
 }
 
+/** Priority order for sorting (higher priority = lower index) */
+const PRIORITY_ORDER: Record<string, number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+};
+
+/** Effort order for sorting (larger effort = lower index) */
+const EFFORT_ORDER: Record<string, number> = {
+  xlarge: 0,
+  large: 1,
+  medium: 2,
+  small: 3,
+  trivial: 4,
+};
+
+function sortTasks(tasks: Task[], sortField: SortField): Task[] {
+  if (sortField === "manual") {
+    return tasks; // Keep original order
+  }
+
+  return [...tasks].sort((a, b) => {
+    switch (sortField) {
+      case "priority": {
+        const aPriority = PRIORITY_ORDER[a.priority ?? ""] ?? 999;
+        const bPriority = PRIORITY_ORDER[b.priority ?? ""] ?? 999;
+        return aPriority - bPriority;
+      }
+      case "dueDate": {
+        const aDate = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
+        const bDate = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
+        return aDate - bDate;
+      }
+      case "effort": {
+        const aEffort = EFFORT_ORDER[(a as any).effort ?? ""] ?? 999;
+        const bEffort = EFFORT_ORDER[(b as any).effort ?? ""] ?? 999;
+        return aEffort - bEffort;
+      }
+      case "title": {
+        return a.title.localeCompare(b.title);
+      }
+      default:
+        return 0;
+    }
+  });
+}
+
 function applyPriorityStyles(css?: string) {
   if (typeof document === "undefined") return;
   let styleEl = document.getElementById("priority-styles") as HTMLStyleElement | null;
@@ -76,6 +126,7 @@ export const useBoardStore = defineStore("board", () => {
     assignees: [],
   });
   const collapsedColumns = ref<Record<string, boolean>>({});
+  const columnSortState = ref<ColumnSortState>({});
   const availableAgents = ref<DetectedAgent[]>([]);
   const defaultAgent = ref<AgentType | null>(null);
   const lastUsedAgent = ref<AgentType | null>(null);
@@ -108,10 +159,14 @@ export const useBoardStore = defineStore("board", () => {
 
   const filteredColumns = computed(() => {
     if (!board.value) return [];
-    return board.value.columns.map((column) => ({
-      ...column,
-      tasks: column.tasks.filter((task) => matchesFilter(task, filters.value)),
-    }));
+    return board.value.columns.map((column) => {
+      const filtered = column.tasks.filter((task) => matchesFilter(task, filters.value));
+      const sortField = columnSortState.value[column.id] ?? "manual";
+      return {
+        ...column,
+        tasks: sortTasks(filtered, sortField),
+      };
+    });
   });
 
   function setBoard(newBoard: Board | null, css?: string) {
@@ -156,6 +211,14 @@ export const useBoardStore = defineStore("board", () => {
 
   function isColumnCollapsed(columnId: string): boolean {
     return !!collapsedColumns.value[columnId];
+  }
+
+  function getColumnSort(columnId: string): SortField {
+    return columnSortState.value[columnId] ?? "manual";
+  }
+
+  function setColumnSort(columnId: string, sortField: SortField) {
+    columnSortState.value[columnId] = sortField;
   }
 
   function getTaskIndex(columnId: string, taskId: string): number {
@@ -266,6 +329,8 @@ export const useBoardStore = defineStore("board", () => {
     resetFilters,
     toggleColumnCollapse,
     isColumnCollapsed,
+    getColumnSort,
+    setColumnSort,
     getTaskIndex,
     moveTask,
     addTaskToColumn,

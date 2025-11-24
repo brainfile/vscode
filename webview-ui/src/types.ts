@@ -1,11 +1,20 @@
 import type { Board, Task, Column, Subtask } from "@brainfile/core";
 
-export type AgentType = "copilot" | "cursor" | "claude-code" | "copy";
+export type AgentType =
+  | "copilot"
+  | "cursor"
+  | "cline"
+  | "kilo-code"
+  | "claude-code"
+  | "continue"
+  | "copy";
 
 export interface DetectedAgent {
   type: AgentType;
   label: string;
   available: boolean;
+  /** Capability level: full, partial, or minimal */
+  capability: "full" | "partial" | "minimal";
 }
 
 export interface BoardUpdateMessage {
@@ -79,3 +88,27 @@ export interface FiltersState {
 export type TaskLike = Task;
 export type ColumnLike = Column;
 export type SubtaskLike = Subtask;
+
+/** Sort field options for tasks within a column */
+export type SortField = "manual" | "priority" | "dueDate" | "effort" | "title";
+
+export interface SortOption {
+  field: SortField;
+  label: string;
+  /** Sort direction indicator shown in UI */
+  indicator: string;
+}
+
+/** Available sort options with sane defaults */
+export const SORT_OPTIONS: SortOption[] = [
+  { field: "manual", label: "Manual", indicator: "" },
+  { field: "priority", label: "Priority", indicator: "↓" },
+  { field: "dueDate", label: "Due Date", indicator: "↑" },
+  { field: "effort", label: "Effort", indicator: "↓" },
+  { field: "title", label: "Title", indicator: "A-Z" },
+];
+
+/** Per-column sort state */
+export interface ColumnSortState {
+  [columnId: string]: SortField;
+}

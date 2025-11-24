@@ -158,6 +158,125 @@ The VS Code API is mocked in `src/__tests__/__mocks__/vscode.ts`. Jest automatic
 - Add JSDoc comments for public functions
 - No `any` types without justification
 
+## CSS Kit
+
+The webview uses a custom CSS kit for consistent styling. Files are in `webview-ui/src/styles/`:
+
+```
+styles/
+├── vars.css       # Semantic CSS variables
+├── utilities.css  # Utility classes
+└── main.css       # Component styles (imports vars + utilities)
+```
+
+### Variables (`vars.css`)
+
+Maps VS Code theme variables to semantic names:
+
+```css
+/* Colors */
+--c-text          /* Primary text (--vscode-editor-foreground) */
+--c-text-muted    /* Secondary text (--vscode-descriptionForeground) */
+--c-bg            /* Background (--vscode-sideBar-background) */
+--c-bg-elevated   /* Section headers (--vscode-sideBarSectionHeader-background) */
+--c-bg-hover      /* Hover state (--vscode-list-hoverBackground) */
+--c-border        /* Borders (--vscode-panel-border) */
+
+/* Typography */
+--text-2xs: 10px  /* Tiny (metadata, IDs) */
+--text-xs: 11px   /* Small (descriptions) */
+--text-sm: 12px   /* Base (body text) */
+--text-base: 13px /* Medium (titles) */
+--font-mono       /* JetBrains Mono */
+
+/* Spacing */
+--space-1 through --space-10  /* 2px, 4px, 6px, 8px, 10px, 12px, 16px, 20px */
+
+/* Other */
+--radius, --radius-md, --radius-lg  /* 4px, 6px, 8px */
+--transition                        /* 0.15s */
+--opacity-muted, --opacity-high     /* 0.6, 0.9 */
+```
+
+### Utility Classes (`utilities.css`)
+
+Common patterns as composable classes:
+
+```html
+<!-- Layout -->
+<div class="flex items-center gap-4">
+<div class="flex-col gap-2">
+
+<!-- Typography -->
+<span class="text-xs text-muted font-mono">
+
+<!-- Spacing -->
+<div class="p-8 mt-4 ml-auto">
+
+<!-- Components -->
+<button class="icon-btn icon-btn-sm">      <!-- Transparent icon button -->
+<header class="section-header">            <!-- Collapsible panel header -->
+<span class="section-title">               <!-- Uppercase label -->
+<span class="count">                       <!-- Mono count badge -->
+<li class="list-item hover-reveal">        <!-- Hoverable row -->
+<div class="empty-state">                  <!-- Empty state message -->
+<span class="id-badge">                    <!-- Task/rule ID -->
+<button class="file-link">                 <!-- Clickable file path -->
+
+<!-- Reveal on hover -->
+<div class="hover-reveal">
+  <button class="reveal-on-hover">         <!-- Hidden until parent hover -->
+</div>
+```
+
+### Writing Component Styles
+
+1. **Prefer utilities** in templates over scoped CSS
+2. **Use kit variables** (`var(--c-text)`) not raw VS Code vars
+3. **Only add scoped CSS** for component-specific styles
+4. **Follow existing patterns** - check `RulesPanel.vue` and `ArchivePanel.vue`
+
+Example component:
+
+```vue
+<template>
+  <div>
+    <header class="section-header hover-reveal">
+      <span class="section-title">Items</span>
+      <span class="count">{{ items.length }}</span>
+      <button class="icon-btn ml-auto reveal-on-hover">
+        <Plus :size="14" />
+      </button>
+    </header>
+    <ul class="list-none">
+      <li v-for="item in items" class="list-item">
+        <span class="id-badge">#{{ item.id }}</span>
+        <span class="item-text">{{ item.text }}</span>
+      </li>
+    </ul>
+    <div v-if="!items.length" class="empty-state">No items</div>
+  </div>
+</template>
+
+<style scoped>
+/* Only component-specific styles */
+.item-text {
+  flex: 1;
+  font-size: var(--text-sm);
+  color: var(--c-text);
+}
+</style>
+```
+
+### Adding New Utilities
+
+When adding reusable patterns:
+
+1. Check if it exists in `utilities.css` first
+2. If truly reusable (3+ uses), add to `utilities.css`
+3. Use kit naming conventions (`text-*`, `bg-*`, `gap-*`)
+4. Document in this file
+
 ## Questions?
 
 - Open an issue for bugs or feature requests

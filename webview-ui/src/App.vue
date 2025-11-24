@@ -42,20 +42,32 @@ const columnViews = computed(() => {
   }));
 });
 
-const stats = computed(() => {
-  const total = board.value
-    ? board.value.columns.reduce((sum, col) => sum + col.tasks.length, 0)
-    : 0;
-  const doneCount =
-    board.value?.columns.find((c) => c.id === "done")?.tasks.length ?? 0;
-  const progress =
-    total > 0 ? Math.round((doneCount / total) * 100) : 0;
+/** Default stat columns if statsConfig not specified */
+const DEFAULT_STAT_COLUMNS = ["todo", "in-progress", "done"];
 
-  return {
-    total,
-    done: doneCount,
-    progress,
-  };
+const stats = computed(() => {
+  if (!board.value) {
+    return { total: 0, progress: 0, cards: [] };
+  }
+
+  const total = board.value.columns.reduce((sum, col) => sum + col.tasks.length, 0);
+  const doneCount = board.value.columns.find((c) => c.id === "done")?.tasks.length ?? 0;
+  const progress = total > 0 ? Math.round((doneCount / total) * 100) : 0;
+
+  // Use statsConfig.columns or fall back to defaults
+  const configuredColumns = board.value.statsConfig?.columns ?? DEFAULT_STAT_COLUMNS;
+
+  // Build stat cards for each configured column
+  const cards = configuredColumns.map((columnId) => {
+    const column = board.value!.columns.find((c) => c.id === columnId);
+    return {
+      id: columnId,
+      label: column?.title ?? columnId.toUpperCase(),
+      count: column?.tasks.length ?? 0,
+    };
+  });
+
+  return { total, progress, cards };
 });
 
 function handleTitleEdit() {
@@ -163,17 +175,18 @@ function handleAgent(payload: { taskId: string; agentType?: string }) {
     </div>
 
     <section v-if="activeTab === 'tasks'" class="panel">
-      <BoardHeader
-        :progress="stats.progress"
-        :total-tasks="stats.total"
-        :done-tasks="stats.done"
-      />
+      <div class="panel-header">
+        <BoardHeader
+          :progress="stats.progress"
+          :stat-cards="stats.cards"
+        />
 
-      <SearchFilter
-        :filters="filters"
-        @update:filters="handleFiltersUpdate"
-        @reset="store.resetFilters"
-      />
+        <SearchFilter
+          :filters="filters"
+          @update:filters="handleFiltersUpdate"
+          @reset="store.resetFilters"
+        />
+      </div>
 
       <div v-if="!loading && board" class="columns-grid">
         <ColumnView
@@ -186,8 +199,10 @@ function handleAgent(payload: { taskId: string; agentType?: string }) {
           :default-agent="defaultAgent"
           :last-used-agent="lastUsedAgent"
           :collapsed="store.isColumnCollapsed(view.column.id)"
+          :current-sort="store.getColumnSort(view.column.id)"
           @toggle-collapse="store.toggleColumnCollapse(view.column.id)"
           @add-task="store.addTaskToColumn(view.column.id)"
+          @set-sort="store.setColumnSort(view.column.id, $event)"
           @edit-task="store.editTask"
           @edit-priority="store.editPriority"
           @delete-task="handleDeleteTask"
@@ -205,31 +220,43 @@ function handleAgent(payload: { taskId: string; agentType?: string }) {
     </section>
 
     <section v-else-if="activeTab === 'rules'" class="panel">
-      <RulesPanel
-        :rules="board?.rules"
-        @add-rule="handleAddRule"
-        @edit-rule="handleEditRule"
-        @delete-rule="handleDeleteRule"
-      />
+      <div class="panel-scroll">
+        <RulesPanel
+          :rules="board?.rules"
+          @add-rule="handleAddRule"
+          @edit-rule="handleEditRule"
+          @delete-rule="handleDeleteRule"
+        />
+      </div>
     </section>
 
     <section v-else class="panel">
-      <ArchivePanel :tasks="board?.archive ?? []" @open-file="store.openFile" />
+      <div class="panel-scroll">
+        <ArchivePanel :tasks="board?.archive ?? []" @open-file="store.openFile" />
+      </div>
     </section>
   </div>
 </template>
 <style scoped>
 .app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
   padding: 0;
   background: var(--vscode-sideBar-background);
   color: var(--vscode-sideBar-foreground);
-  min-height: 100vh;
+}
+
+.header-top {
+  flex-shrink: 0;
 }
 
 .tabs {
+  flex-shrink: 0;
   display: flex;
   gap: 4px;
-  margin-bottom: 12px;
+  margin-bottom: 0;
   padding: 0 12px;
   border-bottom: 1px solid var(--vscode-panel-border);
 }
@@ -259,14 +286,31 @@ function handleAgent(payload: { taskId: string; agentType?: string }) {
 }
 
 .panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
   background: var(--vscode-sideBar-background);
-  padding: 0 12px 16px;
+  padding: 0 12px 0;
+}
+
+.panel-header {
+  flex-shrink: 0;
 }
 
 .columns-grid {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 16px;
+}
+
+.panel-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .empty-state {
@@ -281,6 +325,7 @@ function handleAgent(payload: { taskId: string; agentType?: string }) {
 }
 
 .banner {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;

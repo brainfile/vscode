@@ -5,17 +5,75 @@ All notable changes to the Brainfile VSCode extension will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.0] - 2025-11-22
+## [0.8.0] - 2025-11-23
+
+### 🎨 Complete UI Rewrite
+
+The entire webview has been rebuilt from scratch using **Vue 3 + Vite + Pinia**, replacing thousands of lines of inline HTML generation with a modern reactive SPA architecture.
 
 ### Added
-- Vue 3 + Vite webview in `webview-ui/` with Pinia state store and VS Code messaging composable
-- New `webviewReady` handshake plus `boardUpdate` payloads that include priority styles from settings
-- Vite manifest-driven loader and hashed assets in `media/webview`
+
+#### Send to Agent
+- **One-click task dispatch** to AI coding assistants directly from task cards
+- Support for **GitHub Copilot** (native VS Code chat API)
+- Support for **Claude Code** (VS Code extension API)
+- **Copy to Clipboard** fallback for unsupported agents
+- Split button UI with dropdown for agent selection
+- Persists last-used agent preference per workspace
+- Manifest-driven provider system for easy extension
+
+#### Column Sorting
+- **Per-column sort controls** in column headers
+- Sort options: Manual (default), Priority, Due Date, Effort, Title A-Z
+- Sort state is UI-only (doesn't modify brainfile.md)
+- Visual indicator shows active sort mode
+
+#### Quick Action Buttons
+- **Check button** (✓) on task cards to mark complete
+- **Archive button** on completed tasks
+- **Play button** (▶) to send task to AI agent
+- Buttons appear on hover, minimalist design
+
+#### Dynamic Stat Cards
+- Stat cards now respect `statsConfig.columns` from brainfile.md
+- Configure which columns appear in header stats (max 4)
+- Falls back to sensible defaults if not configured
+
+#### Fixed Header Layout
+- Header and search/filter controls stay fixed at top
+- Only the board columns scroll beneath
+- Better UX for large task boards
+
+#### Vue 3 Architecture
+- Complete SPA with Vue 3 Composition API
+- Pinia store for centralized state management
+- VS Code messaging composable for extension communication
+- Vite build with hashed assets and manifest-driven loading
+- Component library: BoardHeader, Column, TaskCard, SearchFilter, RulesPanel, ArchivePanel
+
+#### Improved Drag & Drop
+- Uses vuedraggable library for smooth drag interactions
+- Drag handle on task rows
+- Click-to-expand still works on task content
+- Visual feedback during drag operations
+
+#### Modern Icons
+- Lucide icon library for consistent, crisp icons
+- Chevrons, plus, check, archive, play, and more
 
 ### Changed
-- `boardViewProvider.ts` now streams board updates to the Vue app instead of regenerating inline HTML
-- Build scripts run `webview:build` before `compile`/`package`; `.vscodeignore` excludes webview sources from the vsix
-- README documents the split architecture and webview build workflow
+- **Webview architecture**: Inline HTML generation → Vue SPA with hot module replacement
+- **State management**: Direct DOM manipulation → Reactive Pinia store
+- **Styling**: Inline styles → Scoped CSS with VS Code theme variables
+- **Message handling**: Callback soup → Typed message protocol
+- Build pipeline runs `webview:build` before `compile`/`package`
+- `.vscodeignore` excludes webview source files from VSIX
+
+### Fixed
+- Drag-and-drop event bubbling causing incorrect task positioning
+- Real-time updates when editing via CodeLens
+- Task expansion/collapse state preservation
+- Priority label click handling
 
 ## [0.7.4] - 2025-11-22
 

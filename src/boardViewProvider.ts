@@ -23,6 +23,7 @@ import {
   generateErrorHtml,
   // Agent utilities
   buildAgentPrompt,
+  getAgentRegistry,
   createParseWarningMessage,
   // Board operations
   updateTask,
@@ -75,60 +76,25 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Detect available AI agents in the current environment
-   */
-  private detectAvailableAgents(): DetectedAgent[] {
-    const agents: DetectedAgent[] = [];
-
-    // Check if running in Cursor
-    const isCursor = vscode.env.appName.toLowerCase().includes("cursor");
-    if (isCursor) {
-      agents.push({ type: "cursor", label: "Cursor", available: true });
-    }
-
-    // Check for Copilot Chat extension
-    const copilotExt = vscode.extensions.getExtension("github.copilot-chat");
-    if (copilotExt) {
-      agents.push({ type: "copilot", label: "Copilot", available: true });
-    }
-
-    // Check for Claude Code extension
-    const claudeExt = vscode.extensions.getExtension("anthropic.claude-code");
-    if (claudeExt) {
-      agents.push({ type: "claude-code", label: "Claude", available: true });
-    }
-
-    // Always add copy fallback
-    agents.push({ type: "copy", label: "Copy", available: true });
-
-    return agents;
-  }
-
-  /**
    * Send available agents to the webview
    */
   private postAvailableAgents() {
     if (!this._view) return;
-    const agents = this.detectAvailableAgents();
-    const defaultAgent = this.getDefaultAgent();
+    const registry = getAgentRegistry();
+
+    // Sync last used from workspace state
+    if (this._lastUsedAgent) {
+      registry.setLastUsed(this._lastUsedAgent);
+    }
+
+    const agents = registry.getAvailableAgents();
+    const defaultAgent = registry.getDefaultAgent();
     this._view.webview.postMessage({
       type: "agentsDetected",
       agents,
       defaultAgent,
-      lastUsed: this._lastUsedAgent,
+      lastUsed: registry.getLastUsed() || defaultAgent,
     });
-  }
-
-  /**
-   * Get the default agent (last used or first available)
-   */
-  private getDefaultAgent(): AgentType {
-    const agents = this.detectAvailableAgents();
-    const lastUsed = agents.find(a => a.type === this._lastUsedAgent && a.available);
-    if (lastUsed) return lastUsed.type;
-    // Return first available non-copy agent, or copy as last resort
-    const preferred = agents.find(a => a.type !== "copy" && a.available);
-    return preferred?.type || "copy";
   }
 
   /**
@@ -1063,58 +1029,25 @@ columns:
         task: targetTask,
       });
 
-      // Use provided agent or default
-      const agent = agentType || this.getDefaultAgent();
-      this._lastUsedAgent = agent;
+      // Use the agent registry for sending
+      const registry = getAgentRegistry();
+      const agent = agentType || registry.getDefaultAgent();
 
       // Persist to workspace state
+      this._lastUsedAgent = agent;
       if (this._context) {
         this._context.workspaceState.update("brainfile.lastUsedAgent", agent);
       }
 
-      await this.sendToAgent(agent, prompt);
+      const result = await registry.sendToAgent(agent, prompt);
+      if (!result.success) {
+        vscode.window.showErrorMessage(result.message || "Failed to send to agent");
+      } else if (result.copiedToClipboard && result.message) {
+        vscode.window.showInformationMessage(result.message);
+      }
     } catch (error) {
       log("Error sending to agent:", error);
       vscode.window.showErrorMessage("Failed to build agent prompt.");
-    }
-  }
-
-  /**
-   * Send prompt to the specified agent
-   */
-  private async sendToAgent(agent: AgentType, prompt: string): Promise<void> {
-    switch (agent) {
-      case "copilot":
-      case "cursor":
-        // Use workbench.action.chat.open with prompt directly
-        try {
-          await vscode.commands.executeCommand("workbench.action.chat.open", prompt);
-        } catch (err) {
-          // Fallback to clipboard if command fails
-          await vscode.env.clipboard.writeText(prompt);
-          vscode.window.showInformationMessage("Prompt copied. Paste into chat.");
-        }
-        break;
-
-      case "claude-code":
-        // Open terminal and run claude CLI
-        const escapedPrompt = prompt.replace(/"/g, '\\"').replace(/\n/g, '\\n');
-        const terminal = vscode.window.createTerminal("Claude Code");
-        terminal.show();
-        terminal.sendText(`claude "${escapedPrompt}"`);
-        break;
-
-      case "copy":
-      default:
-        // Copy to clipboard and show in document
-        await vscode.env.clipboard.writeText(prompt);
-        const doc = await vscode.workspace.openTextDocument({
-          content: prompt,
-          language: "markdown",
-        });
-        await vscode.window.showTextDocument(doc, { preview: true });
-        vscode.window.showInformationMessage("Prompt copied to clipboard.");
-        break;
     }
   }
 

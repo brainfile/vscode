@@ -1,8 +1,13 @@
 <script setup lang="ts">
+export interface StatCard {
+  id: string;
+  label: string;
+  count: number;
+}
+
 defineProps<{
   progress: number;
-  totalTasks: number;
-  doneTasks: number;
+  statCards: StatCard[];
 }>();
 </script>
 
@@ -19,13 +24,9 @@ defineProps<{
     </div>
 
     <div class="stats">
-      <div class="stat">
-        <div class="stat-value">{{ totalTasks }}</div>
-        <div class="stat-label">TOTAL</div>
-      </div>
-      <div class="stat">
-        <div class="stat-value">{{ doneTasks }}</div>
-        <div class="stat-label">DONE</div>
+      <div v-for="card in statCards" :key="card.id" class="stat">
+        <div class="stat-value">{{ card.count }}</div>
+        <div class="stat-label">{{ card.label }}</div>
       </div>
     </div>
   </div>

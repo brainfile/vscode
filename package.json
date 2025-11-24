@@ -37,7 +37,8 @@
   ],
   "activationEvents": [
     "workspaceContains:**/brainfile.md",
-    "workspaceContains:**/.brainfile.md"
+    "workspaceContains:**/.brainfile.md",
+    "onWebviewPanel:brainfile.editorPanel"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -56,6 +57,11 @@
         "command": "brainfile.addTask",
         "title": "Brainfile: Add Task",
         "icon": "$(add)"
+      },
+      {
+        "command": "brainfile.openInEditor",
+        "title": "Brainfile: Open Board in Editor Tab",
+        "icon": "$(open-editors-view-icon)"
       },
       {
         "command": "brainfile.codelens.openBoard",
@@ -84,6 +90,10 @@
       {
         "command": "brainfile.codelens.changePriority",
         "title": "Brainfile: Change Priority"
+      },
+      {
+        "command": "brainfile.codelens.lintAndSort",
+        "title": "Brainfile: Lint & Sort"
       }
     ],
     "keybindings": [
@@ -197,8 +207,6 @@
   },
   "dependencies": {
     "@brainfile/core": "^0.4.1",
-    "@types/marked": "^5.0.2",
-    "js-yaml": "^4.1.0",
-    "marked": "^17.0.0"
+    "js-yaml": "^4.1.0"
   }
 }

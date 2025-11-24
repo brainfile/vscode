@@ -1,9 +1,20 @@
 <script setup lang="ts">
 import type { Task } from "@brainfile/core";
-import { computed, ref } from "vue";
+import { computed, ref, onMounted, onUnmounted } from "vue";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { Archive, Check, ChevronDown, GripVertical, Pencil, Send, Trash2 } from "lucide-vue-next";
+import {
+  GripVertical,
+  MoreVertical,
+  Play,
+  Copy,
+  Pencil,
+  Tag,
+  Archive,
+  Check,
+  Trash2,
+  FileText,
+} from "lucide-vue-next";
 import type { AgentType, DetectedAgent } from "../types";
 
 const props = defineProps<{
@@ -27,6 +38,8 @@ const emit = defineEmits<{
 
 const expanded = ref(false);
 const copied = ref(false);
+const menuOpen = ref(false);
+const menuRef = ref<HTMLElement | null>(null);
 
 marked.setOptions({ breaks: true });
 
@@ -37,20 +50,14 @@ const descriptionHtml = computed(() => {
   return DOMPurify.sanitize(html);
 });
 
-const primaryAgent = computed<AgentType>(() => {
-  return (
-    props.lastUsedAgent ||
-    props.defaultAgent ||
-    props.agents.find((a) => a.available && a.type !== "copy")?.type ||
-    "copy"
-  );
-});
+// Filter to only available agents (excluding copy which is always shown separately)
+const availableAgents = computed(() =>
+  props.agents.filter((a) => a.available && a.type !== "copy")
+);
 
 const priorityClass = computed(() =>
   props.task.priority ? `priority-${props.task.priority}` : ""
 );
-
-const dropdownOpen = ref(false);
 
 async function copyTaskId() {
   try {
@@ -62,14 +69,58 @@ async function copyTaskId() {
   }
 }
 
-function toggleDropdown() {
-  dropdownOpen.value = !dropdownOpen.value;
+function toggleMenu(event: Event) {
+  event.stopPropagation();
+  menuOpen.value = !menuOpen.value;
 }
 
-function selectAgent(agent: AgentType) {
-  dropdownOpen.value = false;
-  emit("send-agent", agent);
+function closeMenu() {
+  menuOpen.value = false;
 }
+
+function handleAction(action: string, event: Event) {
+  event.stopPropagation();
+  closeMenu();
+
+  switch (action) {
+    case "edit":
+      emit("edit");
+      break;
+    case "edit-priority":
+      emit("edit-priority");
+      break;
+    case "complete":
+      emit("complete");
+      break;
+    case "archive":
+      emit("archive");
+      break;
+    case "delete":
+      emit("delete");
+      break;
+  }
+}
+
+function handleAgentAction(agentType: AgentType, event: Event) {
+  event.stopPropagation();
+  closeMenu();
+  emit("send-agent", agentType);
+}
+
+// Close menu when clicking outside
+function handleClickOutside(event: MouseEvent) {
+  if (menuRef.value && !menuRef.value.contains(event.target as Node)) {
+    closeMenu();
+  }
+}
+
+onMounted(() => {
+  document.addEventListener("click", handleClickOutside);
+});
+
+onUnmounted(() => {
+  document.removeEventListener("click", handleClickOutside);
+});
 </script>
 
 <template>
@@ -89,14 +140,11 @@ function selectAgent(agent: AgentType) {
       <div class="task-id" :data-task-id="task.id" title="Click to copy" @click.stop="copyTaskId">
         {{ task.id }}
       </div>
-      <div class="task-actions">
-        <button class="task-action edit" data-action="edit" title="Edit" @click.stop="emit('edit')">
-          <Pencil :size="14" />
-        </button>
+      <!-- Quick actions -->
+      <div class="quick-actions">
         <button
           v-if="columnId === 'done'"
-          class="task-action archive"
-          data-action="archive"
+          class="quick-action-btn"
           title="Archive"
           @click.stop="emit('archive')"
         >
@@ -104,38 +152,77 @@ function selectAgent(agent: AgentType) {
         </button>
         <button
           v-else
-          class="task-action complete"
-          data-action="complete"
-          title="Mark as done"
+          class="quick-action-btn"
+          title="Mark complete"
           @click.stop="emit('complete')"
         >
           <Check :size="14" />
         </button>
-        <button class="task-action delete" data-action="delete" title="Delete" @click.stop="emit('delete')">
-          <Trash2 :size="14" />
+        <button
+          class="quick-action-btn"
+          title="Send to agent"
+          @click.stop="emit('send-agent')"
+        >
+          <Play :size="14" />
         </button>
-        <div class="agent-split-btn">
-          <button class="agent-primary" data-action="send-agent-default" title="Send to agent" @click.stop="emit('send-agent', primaryAgent)">
-            <Send :size="14" />
-          </button>
-          <button class="agent-dropdown-toggle" data-action="agent-dropdown" title="Choose agent" @click.stop="toggleDropdown">
-            <ChevronDown :size="12" />
-          </button>
-          <div class="agent-dropdown-menu" v-show="dropdownOpen">
+      </div>
+      <!-- Kebab menu (overflow) -->
+      <div class="task-menu" ref="menuRef">
+        <button class="task-menu-trigger" title="Actions" @click="toggleMenu">
+          <MoreVertical :size="16" />
+        </button>
+        <div class="task-menu-dropdown" v-show="menuOpen">
+          <!-- Agent actions -->
+          <div class="menu-section" v-if="availableAgents.length > 0">
+            <div class="menu-section-label">Send to Agent</div>
             <button
-              v-for="agent in agents"
+              v-for="agent in availableAgents"
               :key="agent.type"
-              class="agent-option"
-              :data-agent="agent.type"
-              :data-unavailable="!agent.available"
-              :disabled="!agent.available"
-              @click.stop="selectAgent(agent.type)"
+              class="menu-item"
+              @click="handleAgentAction(agent.type, $event)"
             >
+              <Play :size="14" class="menu-icon" />
               {{ agent.label }}
             </button>
-            <div class="agent-divider"></div>
-            <button class="agent-option" data-agent="copy" @click.stop="selectAgent('copy')">Copy prompt</button>
           </div>
+          <button class="menu-item" @click="handleAgentAction('copy', $event)">
+            <Copy :size="14" class="menu-icon" />
+            Copy prompt
+          </button>
+          <div class="menu-divider"></div>
+          <!-- Edit actions -->
+          <button class="menu-item" @click="handleAction('edit', $event)">
+            <Pencil :size="14" class="menu-icon" />
+            Edit in file
+          </button>
+          <button class="menu-item" @click="handleAction('edit-priority', $event)">
+            <Tag :size="14" class="menu-icon" />
+            Change priority
+          </button>
+          <div class="menu-divider"></div>
+          <!-- State actions -->
+          <button
+            v-if="columnId === 'done'"
+            class="menu-item"
+            @click="handleAction('archive', $event)"
+          >
+            <Archive :size="14" class="menu-icon" />
+            Archive
+          </button>
+          <button
+            v-else
+            class="menu-item"
+            @click="handleAction('complete', $event)"
+          >
+            <Check :size="14" class="menu-icon" />
+            Mark complete
+          </button>
+          <div class="menu-divider"></div>
+          <!-- Destructive -->
+          <button class="menu-item menu-item-danger" @click="handleAction('delete', $event)">
+            <Trash2 :size="14" class="menu-icon" />
+            Delete
+          </button>
         </div>
       </div>
     </div>
@@ -191,7 +278,8 @@ function selectAgent(agent: AgentType) {
         :data-file="file"
         @click.stop="emit('open-file', file)"
       >
-        📄 {{ file }}
+        <FileText :size="12" class="related-file-icon" />
+        {{ file }}
       </div>
     </div>
   </div>

@@ -1,11 +1,13 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { BoardViewProvider } from './boardViewProvider';
+import { BoardEditorPanel, BoardEditorPanelSerializer } from './boardEditorPanel';
 import { BrainfileCompletionProvider } from './completionProvider';
 import { BrainfileCodeLensProvider } from './codeLensProvider';
 import { BrainfileHoverProvider } from './hoverProvider';
 import { BrainfileDecorationProvider } from './fileDecorationProvider';
-import { BrainfileParser, BrainfileSerializer } from '@brainfile/core';
+import { BrainfileParser, BrainfileSerializer, BrainfileLinter } from '@brainfile/core';
+import { buildAgentPrompt } from './board';
 
 const LOG_PREFIX = '[Brainfile]';
 let outputChannel: vscode.OutputChannel | undefined;
@@ -69,6 +71,22 @@ export function activate(context: vscode.ExtensionContext) {
         log('Quick adding task');
         provider.quickAddTask();
       })
+    );
+
+    // Register "Open in Editor Tab" command
+    context.subscriptions.push(
+      vscode.commands.registerCommand('brainfile.openInEditor', () => {
+        log('Opening board in editor tab');
+        BoardEditorPanel.createOrShow(context.extensionUri, context);
+      })
+    );
+
+    // Register serializer for editor panel persistence across restarts
+    context.subscriptions.push(
+      vscode.window.registerWebviewPanelSerializer(
+        BoardEditorPanel.viewType,
+        new BoardEditorPanelSerializer(context.extensionUri, context)
+      )
     );
 
     // Register completion provider for brainfile.md files
@@ -352,6 +370,154 @@ function registerCodeLensCommands(
         }
       } catch (error) {
         vscode.window.showErrorMessage(`Failed to change priority: ${error}`);
+      }
+    })
+  );
+
+  // Send to Agent command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('brainfile.codelens.sendToAgent', async (
+      uri: vscode.Uri,
+      taskId: string,
+      columnTitle: string,
+      boardTitle: string
+    ) => {
+      try {
+        const content = fs.readFileSync(uri.fsPath, 'utf8');
+        const board = BrainfileParser.parse(content);
+        if (!board) return;
+
+        // Find the task
+        let targetTask = null;
+        for (const column of board.columns) {
+          const task = column.tasks.find(t => t.id === taskId);
+          if (task) {
+            targetTask = task;
+            break;
+          }
+        }
+
+        if (!targetTask) {
+          vscode.window.showErrorMessage(`Task ${taskId} not found`);
+          return;
+        }
+
+        // Build the prompt
+        const prompt = buildAgentPrompt({
+          boardTitle,
+          columnTitle,
+          task: targetTask,
+        });
+
+        // Show quick pick to choose agent
+        const agents = [
+          { label: '$(comment-discussion) Copilot', description: 'Send to GitHub Copilot Chat', agent: 'copilot' },
+          { label: '$(terminal) Cursor', description: 'Send to Cursor AI', agent: 'cursor' },
+          { label: '$(hubot) Claude Code', description: 'Send to Claude Code terminal', agent: 'claude-code' },
+          { label: '$(clippy) Copy Prompt', description: 'Copy to clipboard', agent: 'copy' },
+        ];
+
+        const selected = await vscode.window.showQuickPick(agents, {
+          placeHolder: 'Choose where to send the task'
+        });
+
+        if (!selected) return;
+
+        // Send to the selected agent
+        switch (selected.agent) {
+          case 'copilot':
+          case 'cursor':
+            try {
+              await vscode.commands.executeCommand('workbench.action.chat.newChat');
+              await new Promise(resolve => setTimeout(resolve, 100));
+              await vscode.commands.executeCommand('workbench.action.chat.open', prompt);
+            } catch (err) {
+              await vscode.env.clipboard.writeText(prompt);
+              vscode.window.showInformationMessage('Prompt copied. Paste into chat.');
+            }
+            break;
+
+          case 'claude-code':
+            const escapedPrompt = prompt.replace(/"/g, '\\"').replace(/\n/g, '\\n');
+            const terminal = vscode.window.createTerminal('Claude Code');
+            terminal.show();
+            terminal.sendText(`claude "${escapedPrompt}"`);
+            break;
+
+          case 'copy':
+          default:
+            await vscode.env.clipboard.writeText(prompt);
+            vscode.window.showInformationMessage('Prompt copied to clipboard.');
+            break;
+        }
+      } catch (error) {
+        vscode.window.showErrorMessage(`Failed to send to agent: ${error}`);
+      }
+    })
+  );
+
+  // Lint & Sort command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('brainfile.codelens.lintAndSort', async (uri: vscode.Uri) => {
+      try {
+        const content = fs.readFileSync(uri.fsPath, 'utf8');
+        const board = BrainfileParser.parse(content);
+
+        // Run linter first
+        const lintResult = BrainfileLinter.lint(content, { autoFix: true });
+
+        // Sort columns by order property
+        let sortedContent = lintResult.fixedContent || content;
+        const sortedBoard = BrainfileParser.parse(sortedContent);
+
+        if (sortedBoard && sortedBoard.columns.length > 0) {
+          // Sort columns by order property (ascending)
+          sortedBoard.columns.sort((a, b) => {
+            const orderA = a.order ?? Number.MAX_SAFE_INTEGER;
+            const orderB = b.order ?? Number.MAX_SAFE_INTEGER;
+            return orderA - orderB;
+          });
+          sortedContent = BrainfileSerializer.serialize(sortedBoard);
+        }
+
+        // Check if anything changed
+        if (sortedContent === content) {
+          vscode.window.showInformationMessage('No changes needed - file is already sorted and lint-free.');
+          return;
+        }
+
+        // Show diff preview
+        const fixedDoc = await vscode.workspace.openTextDocument({
+          content: sortedContent,
+          language: 'markdown'
+        });
+
+        await vscode.commands.executeCommand(
+          'vscode.diff',
+          uri,
+          fixedDoc.uri,
+          'brainfile.md: Original ↔ Lint & Sort'
+        );
+
+        const choice = await vscode.window.showInformationMessage(
+          'Apply lint fixes and sort columns?',
+          'Apply Changes',
+          'Cancel'
+        );
+
+        if (choice !== 'Apply Changes') return;
+
+        await writeAndRefreshDocument(uri, sortedContent);
+        boardProvider.refresh();
+
+        const fixCount = lintResult.issues.filter(i => i.fixable).length;
+        const message = fixCount > 0
+          ? `Applied ${fixCount} lint fix(es) and sorted columns.`
+          : 'Columns sorted by order.';
+        vscode.window.showInformationMessage(message);
+
+      } catch (error) {
+        vscode.window.showErrorMessage(`Lint & Sort failed: ${error}`);
       }
     })
   );
