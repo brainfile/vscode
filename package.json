@@ -2,7 +2,7 @@
   "name": "brainfile",
   "displayName": "Brainfile",
   "description": "Protocol-first task management for AI-assisted development. Visual kanban board for brainfile.md files.",
-  "version": "0.8.0",
+  "version": "0.8.2",
   "publisher": "brainfile",
   "license": "MIT",
   "icon": "icon.png",
@@ -38,6 +38,8 @@
   "activationEvents": [
     "workspaceContains:**/brainfile.md",
     "workspaceContains:**/.brainfile.md",
+    "workspaceContains:**/brainfile.*.md",
+    "workspaceContains:**/.bb.md",
     "onWebviewPanel:brainfile.editorPanel"
   ],
   "main": "./out/extension.js",
@@ -94,6 +96,11 @@
       {
         "command": "brainfile.codelens.lintAndSort",
         "title": "Brainfile: Lint & Sort"
+      },
+      {
+        "command": "brainfile.quickSwitch",
+        "title": "Brainfile: Quick Switch",
+        "icon": "$(list-selection)"
       }
     ],
     "keybindings": [
@@ -102,6 +109,11 @@
         "key": "ctrl+shift+t",
         "mac": "cmd+shift+t",
         "when": "brainfile.boardActive"
+      },
+      {
+        "command": "brainfile.quickSwitch",
+        "key": "ctrl+shift+b",
+        "mac": "cmd+shift+b"
       }
     ],
     "viewsContainers": {
@@ -139,6 +151,16 @@
           "type": "boolean",
           "default": true,
           "description": "Show CodeLens inline actions above tasks in brainfile.md files"
+        },
+        "brainfile.lintOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run linter and show diagnostics when saving brainfile.md files"
+        },
+        "brainfile.autoFixOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically fix lint issues when saving brainfile.md files (requires lintOnSave)"
         },
         "brainfile.priorities.criticalColor": {
           "type": "string",
@@ -206,7 +228,7 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "@brainfile/core": "^0.4.1",
+    "@brainfile/core": "^0.6.0",
     "js-yaml": "^4.1.0"
   }
 }

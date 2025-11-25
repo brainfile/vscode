@@ -5,7 +5,7 @@ import {
   taskIdExists,
   findTaskById,
   findColumnById,
-} from "../taskId";
+} from "@brainfile/core";
 import type { Board } from "@brainfile/core";
 
 describe("board/data/taskId", () => {

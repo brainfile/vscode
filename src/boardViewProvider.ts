@@ -7,10 +7,14 @@ import {
   BrainfileSerializer,
   BrainfileLinter,
   Board,
+  Column,
   TaskTemplate,
   Task,
+  Rule,
   BUILT_IN_TEMPLATES,
-  hashBoardContent
+  hashBoardContent,
+  discover,
+  type DiscoveredFile,
 } from "@brainfile/core";
 
 // Import modular board components
@@ -43,6 +47,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
   private _boardFilePath?: string;
   private _fileWatcher?: vscode.FileSystemWatcher;
   private _archiveWatcher?: vscode.FileSystemWatcher;
+  private _discoveryWatcher?: vscode.FileSystemWatcher;
   private _textDocumentListener?: vscode.Disposable;
   private _refreshTimer?: NodeJS.Timeout;
   private _isFirstRender: boolean = true;
@@ -95,6 +100,47 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
       defaultAgent,
       lastUsed: registry.getLastUsed() || defaultAgent,
     });
+  }
+
+  /**
+   * Send available brainfiles to the webview for the switcher dropdown
+   */
+  private postAvailableBrainfiles() {
+    if (!this._view) return;
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) return;
+
+    const result = discover(workspaceRoot);
+    const currentFile = this._boardFilePath;
+
+    this._view.webview.postMessage({
+      type: "availableFiles",
+      files: result.files.map((f: DiscoveredFile) => ({
+        name: f.name,
+        relativePath: f.relativePath,
+        absolutePath: f.absolutePath,
+        itemCount: f.itemCount,
+        isPrivate: f.isPrivate,
+        isCurrent: f.absolutePath === currentFile,
+      })),
+    });
+  }
+
+  /**
+   * Handle switching to a different brainfile
+   */
+  private handleSwitchFile(absolutePath: string) {
+    if (!absolutePath || !fs.existsSync(absolutePath)) {
+      log(`Cannot switch to file: ${absolutePath}`);
+      return;
+    }
+
+    log(`Switching to brainfile: ${absolutePath}`);
+    this._boardFilePath = absolutePath;
+    this._lastContentHash = undefined;
+    this._lastValidBoard = undefined;
+    this.refresh();
+    this.postAvailableBrainfiles();
   }
 
   /**
@@ -235,7 +281,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
     }
 
     // Quick pick for column selection
-    const columnOptions = board.columns.map((col) => ({
+    const columnOptions = board.columns.map((col: Column) => ({
       label: col.title,
       description: `${col.tasks.length} tasks`,
       id: col.id,
@@ -246,7 +292,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
       canPickMany: false,
     });
 
-    const columnId = selectedColumn?.id || "todo";
+    const columnId = (selectedColumn as { id: string } | undefined)?.id || "todo";
 
     // Optional description
     const description = await vscode.window.showInputBox({
@@ -255,14 +301,14 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
     });
 
     // Generate next task ID
-    const allTaskIds = board.columns.flatMap((col) =>
-      col.tasks.map((t) => parseInt(t.id.replace("task-", "")) || 0)
+    const allTaskIds = board.columns.flatMap((col: Column) =>
+      col.tasks.map((t: Task) => parseInt(t.id.replace("task-", "")) || 0)
     );
     const maxId = Math.max(0, ...allTaskIds);
     const newTaskId = `task-${maxId + 1}`;
 
     // Add task to the selected column
-    const column = board.columns.find((col) => col.id === columnId);
+    const column = board.columns.find((col: Column) => col.id === columnId);
     if (column) {
       column.tasks.push({
         id: newTaskId,
@@ -432,6 +478,12 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
         case "getAvailableAgents":
           this.postAvailableAgents();
           break;
+        case "switchFile":
+          this.handleSwitchFile(data.absolutePath);
+          break;
+        case "getAvailableFiles":
+          this.postAvailableBrainfiles();
+          break;
       }
     });
   }
@@ -582,6 +634,22 @@ columns:
       });
     }
 
+    // Watch for any brainfile creation/deletion to update the switcher
+    this._discoveryWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(rootPath, "**/*brainfile*.md"),
+      false,
+      true, // ignore changes, only care about create/delete
+      false
+    );
+    this._discoveryWatcher.onDidCreate(() => {
+      log("New brainfile created, refreshing available files");
+      this.postAvailableBrainfiles();
+    });
+    this._discoveryWatcher.onDidDelete(() => {
+      log("Brainfile deleted, refreshing available files");
+      this.postAvailableBrainfiles();
+    });
+
     this._textDocumentListener = vscode.workspace.onDidChangeTextDocument(
       (event) => {
         if (event.document.uri.fsPath === this._boardFilePath) {
@@ -666,6 +734,11 @@ columns:
       this._archiveWatcher = undefined;
     }
 
+    if (this._discoveryWatcher) {
+      this._discoveryWatcher.dispose();
+      this._discoveryWatcher = undefined;
+    }
+
     if (this._textDocumentListener) {
       this._textDocumentListener.dispose();
       this._textDocumentListener = undefined;
@@ -700,18 +773,24 @@ columns:
         log("Failed to parse board file");
         this._parseErrorCount++;
 
+        // Run linter to get detailed error info
+        const lintResult = BrainfileLinter.lint(content);
+        const firstIssue = lintResult.issues[0];
+        const summary = firstIssue 
+          ? `${firstIssue.message}${firstIssue.line ? ` (line ${firstIssue.line})` : ''}`
+          : 'Syntax error in brainfile.md';
+
         if (this._lastValidBoard && this._parseErrorCount <= 3) {
           log("Showing last valid board with warning");
           if (!this._isFirstRender && this._webviewReady) {
             this._view.webview.postMessage(
-              createParseWarningMessage("Syntax error in brainfile.md - showing last valid state")
+              createParseWarningMessage(`Parse error: ${summary} - showing last valid state`, lintResult)
             );
             this.postBoardUpdate(this._lastValidBoard);
           }
           return;
         }
 
-        const lintResult = BrainfileLinter.lint(content);
         this._view.webview.html = generateErrorHtml({
           message: "Failed to parse brainfile.md",
           details: "Check for YAML syntax errors in the frontmatter. Common issues:\n• Missing colons after keys\n• Incorrect indentation\n• Unclosed quotes or brackets",
@@ -768,6 +847,8 @@ columns:
 
     if (this._webviewReady) {
       this._view.webview.postMessage(payload);
+      // Also send available files for the switcher
+      this.postAvailableBrainfiles();
     } else {
       this._pendingBoard = board;
     }
@@ -932,7 +1013,7 @@ columns:
       // Find the task
       let targetTask: { task: Task; columnId: string } | null = null;
       for (const col of board.columns) {
-        const task = col.tasks.find((t) => t.id === taskId);
+        const task = col.tasks.find((t: Task) => t.id === taskId);
         if (task) {
           targetTask = { task, columnId: col.id };
           break;
@@ -1010,7 +1091,7 @@ columns:
       let targetTask: Task | undefined;
       let columnTitle = "";
       for (const col of board.columns) {
-        const found = col.tasks.find((t) => t.id === taskId);
+        const found = col.tasks.find((t: Task) => t.id === taskId);
         if (found) {
           targetTask = found;
           columnTitle = col.title;
@@ -1395,8 +1476,8 @@ columns:
     const board = BrainfileParser.parse(content);
     if (!board) return;
 
-    // Use addTask from boardOperations (handles ID generation)
-    const result = addTask(board, columnId, title, description || "");
+    // Use addTask from core (handles ID generation)
+    const result = addTask(board, columnId, { title, description: description || "" });
     if (!result.success || !result.board) {
       log(`Failed to add task: ${result.error}`);
       return;
@@ -1467,7 +1548,7 @@ columns:
     }
 
     // Generate next rule ID for this type
-    const existingIds = board.rules[ruleType].map((r) => r.id);
+    const existingIds = board.rules[ruleType].map((r: Rule) => r.id);
     const maxId = Math.max(0, ...existingIds);
     const newRuleId = maxId + 1;
 
@@ -1588,7 +1669,7 @@ columns:
     // Find and remove the rule (convert ruleId to number for comparison)
     const ruleIdNum = parseInt(ruleId);
     const ruleIndex = board.rules[ruleType].findIndex(
-      (r) => r.id === ruleIdNum
+      (r: Rule) => r.id === ruleIdNum
     );
     if (ruleIndex !== -1) {
       board.rules[ruleType].splice(ruleIndex, 1);
@@ -1621,7 +1702,7 @@ columns:
     let taskToArchive = null;
     for (const col of board.columns) {
       if (col.id === columnId) {
-        const taskIndex = col.tasks.findIndex((t) => t.id === taskId);
+        const taskIndex = col.tasks.findIndex((t: Task) => t.id === taskId);
         if (taskIndex !== -1) {
           taskToArchive = col.tasks.splice(taskIndex, 1)[0];
           break;

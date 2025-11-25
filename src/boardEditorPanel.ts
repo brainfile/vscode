@@ -8,6 +8,7 @@ import {
   BrainfileLinter,
   Board,
   Task,
+  Rule,
   hashBoardContent,
 } from "@brainfile/core";
 
@@ -314,8 +315,13 @@ export class BoardEditorPanel {
 
         if (this._lastValidBoard && this._parseErrorCount <= 3) {
           if (this._webviewReady) {
+            const lintResult = BrainfileLinter.lint(content);
+            const firstIssue = lintResult.issues[0];
+            const summary = firstIssue 
+              ? `${firstIssue.message}${firstIssue.line ? ` (line ${firstIssue.line})` : ''}`
+              : 'Syntax error in brainfile.md';
             this._panel.webview.postMessage(
-              createParseWarningMessage("Syntax error - showing last valid state")
+              createParseWarningMessage(`Parse error: ${summary} - showing last valid state`, lintResult)
             );
             this._postBoardUpdate(this._lastValidBoard);
           }
@@ -574,7 +580,7 @@ export class BoardEditorPanel {
 
     let targetTask: { task: Task; columnId: string } | null = null;
     for (const col of board.columns) {
-      const task = col.tasks.find((t) => t.id === taskId);
+      const task = col.tasks.find((t: Task) => t.id === taskId);
       if (task) {
         targetTask = { task, columnId: col.id };
         break;
@@ -627,7 +633,7 @@ export class BoardEditorPanel {
     let targetTask: Task | undefined;
     let columnTitle = "";
     for (const col of board.columns) {
-      const found = col.tasks.find((t) => t.id === taskId);
+      const found = col.tasks.find((t: Task) => t.id === taskId);
       if (found) {
         targetTask = found;
         columnTitle = col.title;
@@ -702,7 +708,7 @@ export class BoardEditorPanel {
     let taskToArchive = null;
     for (const col of board.columns) {
       if (col.id === columnId) {
-        const taskIndex = col.tasks.findIndex((t) => t.id === taskId);
+        const taskIndex = col.tasks.findIndex((t: Task) => t.id === taskId);
         if (taskIndex !== -1) {
           taskToArchive = col.tasks.splice(taskIndex, 1)[0];
           break;
@@ -759,7 +765,7 @@ export class BoardEditorPanel {
     const board = BrainfileParser.parse(content);
     if (!board) return;
 
-    const result = addTask(board, columnId, title, description || "");
+    const result = addTask(board, columnId, { title, description: description || "" });
     if (!result.success || !result.board) return;
 
     const column = findColumnById(board, columnId);
@@ -802,7 +808,7 @@ export class BoardEditorPanel {
       board.rules[ruleType] = [];
     }
 
-    const existingIds = board.rules[ruleType].map((r) => r.id);
+    const existingIds = board.rules[ruleType].map((r: Rule) => r.id);
     const maxId = Math.max(0, ...existingIds);
     board.rules[ruleType].push({ id: maxId + 1, rule: ruleText.trim() });
 
@@ -853,7 +859,7 @@ export class BoardEditorPanel {
     if (!board?.rules?.[ruleType]) return;
 
     const ruleIdNum = parseInt(ruleId);
-    const ruleIndex = board.rules[ruleType].findIndex((r) => r.id === ruleIdNum);
+    const ruleIndex = board.rules[ruleType].findIndex((r: Rule) => r.id === ruleIdNum);
     if (ruleIndex !== -1) {
       board.rules[ruleType].splice(ruleIndex, 1);
       this._persistAndRefresh(board, `Deleted ${ruleType} rule ${ruleId}`);

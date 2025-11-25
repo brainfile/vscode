@@ -1,4 +1,4 @@
-import type { Board, Task, Column, Subtask } from "@brainfile/core";
+import type { Board, Task, Column, Subtask, LintResult } from "@brainfile/core";
 
 export type AgentType =
   | "copilot"
@@ -26,6 +26,7 @@ export interface BoardUpdateMessage {
 export interface ParseWarningMessage {
   type: "parseWarning";
   message: string;
+  lintResult?: LintResult;
 }
 
 export interface AgentsDetectedMessage {
@@ -35,10 +36,25 @@ export interface AgentsDetectedMessage {
   lastUsed: AgentType;
 }
 
+export interface AvailableFile {
+  name: string;
+  relativePath: string;
+  absolutePath: string;
+  itemCount: number;
+  isPrivate: boolean;
+  isCurrent: boolean;
+}
+
+export interface AvailableFilesMessage {
+  type: "availableFiles";
+  files: AvailableFile[];
+}
+
 export type ExtensionMessage =
   | BoardUpdateMessage
   | ParseWarningMessage
-  | AgentsDetectedMessage;
+  | AgentsDetectedMessage
+  | AvailableFilesMessage;
 
 export interface WebviewReadyMessage {
   type: "webviewReady";
@@ -66,7 +82,9 @@ export interface WebviewCommandMessage {
     | "fix-issues"
     | "refresh"
     | "sendToAgent"
-    | "getAvailableAgents";
+    | "getAvailableAgents"
+    | "switchFile"
+    | "getAvailableFiles";
   [key: string]: unknown;
 }
 

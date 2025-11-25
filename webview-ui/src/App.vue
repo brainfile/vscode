@@ -19,7 +19,10 @@ const {
   defaultAgent,
   lastUsedAgent,
   loading,
+  availableFiles,
 } = storeToRefs(store);
+
+const showFileSwitcher = ref(false);
 
 const activeTab = ref<"tasks" | "rules" | "archive">("tasks");
 
@@ -96,9 +99,25 @@ function handleMove(payload: {
   );
 }
 
+const hasFixableIssues = computed(() => {
+  return parseWarning.value?.lintResult?.issues.some(i => i.fixable) ?? false;
+});
+
+const issueCount = computed(() => {
+  return parseWarning.value?.lintResult?.issues.length ?? 0;
+});
+
+const fixableCount = computed(() => {
+  return parseWarning.value?.lintResult?.issues.filter(i => i.fixable).length ?? 0;
+});
+
 function clearWarning() {
-  store.setParseWarning(undefined);
+  store.setParseWarning(undefined, undefined);
   store.refresh();
+}
+
+function attemptFix() {
+  store.sendMessage({ type: 'fix-issues' });
 }
 
 function handleAddRule(ruleType: string) {
@@ -132,20 +151,56 @@ function handleSubtask(payload: { taskId: string; subtaskId: string }) {
 function handleAgent(payload: { taskId: string; agentType?: string }) {
   store.sendToAgent(payload.taskId, payload.agentType as any);
 }
+
+function handleSwitchFile(absolutePath: string) {
+  showFileSwitcher.value = false;
+  store.switchFile(absolutePath);
+}
 </script>
 
 <template>
   <div class="app-shell">
     <div class="header-top">
       <div class="board-title-wrapper">
+        <div v-if="availableFiles.length > 1" class="file-switcher">
+          <button
+            class="switcher-btn"
+            :class="{ active: showFileSwitcher }"
+            @click="showFileSwitcher = !showFileSwitcher"
+            title="Switch brainfile (Cmd+Shift+B)"
+          >⇅</button>
+          <div v-if="showFileSwitcher" class="switcher-dropdown">
+            <div
+              v-for="file in availableFiles"
+              :key="file.absolutePath"
+              class="switcher-item"
+              :class="{ current: file.isCurrent }"
+              @click="handleSwitchFile(file.absolutePath)"
+            >
+              <span class="file-name">{{ file.name }}</span>
+              <span class="file-meta">{{ file.itemCount }} items</span>
+              <span v-if="file.isPrivate" class="file-badge">private</span>
+            </div>
+          </div>
+        </div>
         <div class="board-title" id="boardTitle">{{ board?.title ?? "Brainfile" }}</div>
         <button class="title-edit-btn" id="titleEditBtn" title="Edit title" @click="handleTitleEdit">✎</button>
       </div>
     </div>
 
     <div v-if="parseWarning" class="banner warning">
-      <div class="banner__text">{{ parseWarning }}</div>
+      <div class="banner__content">
+        <div class="banner__text">
+          {{ parseWarning.message }}
+          <span v-if="issueCount > 0" class="banner__details">
+            ({{ issueCount }} issue{{ issueCount !== 1 ? 's' : '' }} found{{ fixableCount > 0 ? `, ${fixableCount} fixable` : '' }})
+          </span>
+        </div>
+      </div>
       <div class="banner__actions">
+        <button v-if="hasFixableIssues" class="btn-primary" @click="attemptFix">
+          Attempt Fix ({{ fixableCount }})
+        </button>
         <button class="ghost" @click="clearWarning">Refresh</button>
       </div>
     </div>
@@ -329,13 +384,53 @@ function handleAgent(payload: { taskId: string; agentType?: string }) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   padding: 10px 12px;
   margin: 12px 12px 8px;
   border-radius: 6px;
   background: var(--vscode-notifications-background);
   border: 1px solid var(--vscode-notifications-border);
   color: var(--vscode-notifications-foreground);
+}
+
+.banner__content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.banner__text {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.banner__details {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.banner__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.banner__actions .btn-primary {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.banner__actions .btn-primary:hover {
+  background: var(--vscode-button-hoverBackground);
 }
 
 .banner__actions .ghost {
@@ -345,9 +440,94 @@ function handleAgent(payload: { taskId: string; agentType?: string }) {
   padding: 6px 12px;
   border-radius: 4px;
   cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 button {
   font-family: inherit;
+}
+
+/* File Switcher */
+.file-switcher {
+  position: relative;
+  margin-right: 4px;
+}
+
+.switcher-btn {
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.15s;
+  line-height: 1;
+}
+
+.switcher-btn:hover,
+.switcher-btn.active {
+  background: var(--vscode-toolbar-hoverBackground);
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-panel-border);
+}
+
+.switcher-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 200px;
+  max-width: 300px;
+  background: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  overflow: hidden;
+}
+
+.switcher-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.switcher-item:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.switcher-item.current {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.file-name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-meta {
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+}
+
+.file-badge {
+  font-size: 9px;
+  padding: 2px 4px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 </style>

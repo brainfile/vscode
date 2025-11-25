@@ -1,8 +1,9 @@
 import { computed, ref } from "vue";
-import type { Board, Task } from "@brainfile/core";
+import type { Board, Task, LintResult } from "@brainfile/core";
 import { defineStore } from "pinia";
 import type {
   AgentType,
+  AvailableFile,
   ColumnSortState,
   DetectedAgent,
   FilterOptions,
@@ -118,7 +119,7 @@ function applyPriorityStyles(css?: string) {
 export const useBoardStore = defineStore("board", () => {
   const board = ref<Board | null>(null);
   const loading = ref(true);
-  const parseWarning = ref<string | undefined>();
+  const parseWarning = ref<{ message: string; lintResult?: LintResult } | undefined>();
   const filters = ref<FiltersState>({
     query: "",
     tags: [],
@@ -131,6 +132,7 @@ export const useBoardStore = defineStore("board", () => {
   const defaultAgent = ref<AgentType | null>(null);
   const lastUsedAgent = ref<AgentType | null>(null);
   const priorityStyles = ref<string | undefined>();
+  const availableFiles = ref<AvailableFile[]>([]);
 
   const filterOptions = computed<FilterOptions>(() => {
     const options: FilterOptions = { tags: [], priorities: [], assignees: [] };
@@ -178,14 +180,22 @@ export const useBoardStore = defineStore("board", () => {
     }
   }
 
-  function setParseWarning(message?: string) {
-    parseWarning.value = message;
+  function setParseWarning(message?: string, lintResult?: LintResult) {
+    parseWarning.value = message ? { message, lintResult } : undefined;
   }
 
   function setAgents(agents: DetectedAgent[], preferred: AgentType, lastUsed: AgentType) {
     availableAgents.value = agents;
     defaultAgent.value = preferred;
     lastUsedAgent.value = lastUsed;
+  }
+
+  function setAvailableFiles(files: AvailableFile[]) {
+    availableFiles.value = files;
+  }
+
+  function switchFile(absolutePath: string) {
+    sendMessage({ type: "switchFile", absolutePath });
   }
 
   function sendMessage(message: WebviewToExtensionMessage) {
@@ -321,9 +331,13 @@ export const useBoardStore = defineStore("board", () => {
     defaultAgent,
     lastUsedAgent,
     priorityStyles,
+    availableFiles,
     setBoard,
     setParseWarning,
     setAgents,
+    setAvailableFiles,
+    switchFile,
+    sendMessage,
     requestInitialData,
     updateFilters,
     resetFilters,

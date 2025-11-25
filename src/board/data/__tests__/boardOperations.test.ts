@@ -6,7 +6,7 @@ import {
   updateBoardTitle,
   toggleSubtask,
   updateStatsConfig,
-} from "../boardOperations";
+} from "@brainfile/core";
 import type { Board } from "@brainfile/core";
 
 describe("board/data/boardOperations", () => {
@@ -155,7 +155,7 @@ describe("board/data/boardOperations", () => {
   describe("addTask", () => {
     it("adds task to column", () => {
       const board = createBoard();
-      const result = addTask(board, "todo", "New Task", "New description");
+      const result = addTask(board, "todo", { title: "New Task", description: "New description" });
 
       expect(result.success).toBe(true);
       expect(result.board!.columns[0].tasks).toHaveLength(3);
@@ -166,7 +166,7 @@ describe("board/data/boardOperations", () => {
 
     it("generates sequential task ID", () => {
       const board = createBoard();
-      const result = addTask(board, "todo", "New Task");
+      const result = addTask(board, "todo", { title: "New Task" });
 
       // Highest existing is task-3, so new should be task-4
       expect(result.board!.columns[0].tasks[2].id).toBe("task-4");
@@ -174,7 +174,7 @@ describe("board/data/boardOperations", () => {
 
     it("trims title and description", () => {
       const board = createBoard();
-      const result = addTask(board, "todo", "  Padded Title  ", "  Padded Desc  ");
+      const result = addTask(board, "todo", { title: "  Padded Title  ", description: "  Padded Desc  " });
 
       const newTask = result.board!.columns[0].tasks[2];
       expect(newTask.title).toBe("Padded Title");
@@ -183,7 +183,7 @@ describe("board/data/boardOperations", () => {
 
     it("returns error for non-existent column", () => {
       const board = createBoard();
-      const result = addTask(board, "invalid", "New Task");
+      const result = addTask(board, "invalid", { title: "New Task" });
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("Column invalid not found");

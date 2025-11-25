@@ -3,6 +3,7 @@
  */
 
 import type { WebviewToExtensionMessage, ExtensionToWebviewMessage } from "./types";
+import type { LintResult } from "@brainfile/core";
 
 // =============================================================================
 // Message Type Constants
@@ -161,10 +162,11 @@ export function createAgentsDetectedMessage(
   };
 }
 
-/** Create a parseWarning message */
-export function createParseWarningMessage(message: string): ExtensionToWebviewMessage {
+/** Create a parseWarning message with optional lint details */
+export function createParseWarningMessage(message: string, lintResult?: LintResult): ExtensionToWebviewMessage {
   return {
     type: "parseWarning",
     message,
+    lintResult,
   };
 }

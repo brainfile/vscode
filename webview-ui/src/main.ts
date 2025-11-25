@@ -16,13 +16,16 @@ window.addEventListener("message", (event: MessageEvent<ExtensionMessage>) => {
   switch (message.type) {
     case "boardUpdate":
       store.setBoard(message.board, message.priorityStyles);
-      store.setParseWarning(undefined);
+      store.setParseWarning(undefined, undefined);
       break;
     case "parseWarning":
-      store.setParseWarning(message.message);
+      store.setParseWarning(message.message, message.lintResult);
       break;
     case "agentsDetected":
       store.setAgents(message.agents, message.defaultAgent, message.lastUsed);
+      break;
+    case "availableFiles":
+      store.setAvailableFiles(message.files);
       break;
   }
 });

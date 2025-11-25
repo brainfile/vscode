@@ -6,7 +6,7 @@ import { BrainfileCompletionProvider } from './completionProvider';
 import { BrainfileCodeLensProvider } from './codeLensProvider';
 import { BrainfileHoverProvider } from './hoverProvider';
 import { BrainfileDecorationProvider } from './fileDecorationProvider';
-import { BrainfileParser, BrainfileSerializer, BrainfileLinter } from '@brainfile/core';
+import { BrainfileParser, BrainfileSerializer, BrainfileLinter, Column, Task, discover, type DiscoveredFile } from '@brainfile/core';
 import { buildAgentPrompt } from './board';
 
 const LOG_PREFIX = '[Brainfile]';
@@ -50,6 +50,44 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Add provider to subscriptions for proper disposal
     context.subscriptions.push(provider as any);
+
+    // Register quick switch command (Cmd+Shift+B)
+    context.subscriptions.push(
+      vscode.commands.registerCommand('brainfile.quickSwitch', async () => {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          vscode.window.showInformationMessage('No workspace folder open');
+          return;
+        }
+
+        const result = discover(workspaceRoot);
+        if (result.files.length === 0) {
+          vscode.window.showInformationMessage('No brainfiles found in workspace');
+          return;
+        }
+
+        const items = result.files.map((file: DiscoveredFile) => ({
+          label: file.name,
+          description: `${file.itemCount} items`,
+          detail: file.relativePath,
+          file,
+        }));
+
+        const selected = await vscode.window.showQuickPick(items, {
+          placeHolder: 'Select a brainfile to open (Cmd+Shift+B)',
+          matchOnDescription: true,
+          matchOnDetail: true,
+        });
+
+        if (selected) {
+          const uri = vscode.Uri.file(selected.file.absolutePath);
+          const document = await vscode.workspace.openTextDocument(uri);
+          await vscode.window.showTextDocument(document);
+          provider.refresh();
+        }
+      })
+    );
+    log('Quick switch command registered');
 
     // Register commands
     context.subscriptions.push(
@@ -208,12 +246,12 @@ function registerCodeLensCommands(
         const board = BrainfileParser.parse(content);
         if (!board) return;
 
-        const column = board.columns.find(c => c.id === columnId);
+        const column = board.columns.find((c: Column) => c.id === columnId);
         if (!column) return;
 
         // Generate new task ID
-        const allTaskIds = board.columns.flatMap(c => c.tasks.map(t => t.id));
-        const maxNum = Math.max(0, ...allTaskIds.map(id => {
+        const allTaskIds = board.columns.flatMap((c: Column) => c.tasks.map((t: Task) => t.id));
+        const maxNum = Math.max(0, ...allTaskIds.map((id: string) => {
           const match = id.match(/task-(\d+)/);
           return match ? parseInt(match[1]) : 0;
         }));
@@ -250,10 +288,10 @@ function registerCodeLensCommands(
         const board = BrainfileParser.parse(content);
         if (!board) return;
 
-        const column = board.columns.find(c => c.id === columnId);
+        const column = board.columns.find((c: Column) => c.id === columnId);
         if (!column) return;
 
-        const taskIndex = column.tasks.findIndex(t => t.id === taskId);
+        const taskIndex = column.tasks.findIndex((t: Task) => t.id === taskId);
         if (taskIndex === -1) return;
 
         const [task] = column.tasks.splice(taskIndex, 1);
@@ -283,10 +321,10 @@ function registerCodeLensCommands(
         const board = BrainfileParser.parse(content);
         if (!board) return;
 
-        const column = board.columns.find(c => c.id === columnId);
+        const column = board.columns.find((c: Column) => c.id === columnId);
         if (!column) return;
 
-        const taskIndex = column.tasks.findIndex(t => t.id === taskId);
+        const taskIndex = column.tasks.findIndex((t: Task) => t.id === taskId);
         if (taskIndex === -1) return;
 
         const [task] = column.tasks.splice(taskIndex, 1);
@@ -323,11 +361,11 @@ function registerCodeLensCommands(
         const board = BrainfileParser.parse(content);
         if (!board) return;
 
-        const fromColumn = board.columns.find(c => c.id === fromColumnId);
-        const toColumn = board.columns.find(c => c.id === targetColumn.columnId);
+        const fromColumn = board.columns.find((c: Column) => c.id === fromColumnId);
+        const toColumn = board.columns.find((c: Column) => c.id === targetColumn.columnId);
         if (!fromColumn || !toColumn) return;
 
-        const taskIndex = fromColumn.tasks.findIndex(t => t.id === taskId);
+        const taskIndex = fromColumn.tasks.findIndex((t: Task) => t.id === taskId);
         if (taskIndex === -1) return;
 
         const [task] = fromColumn.tasks.splice(taskIndex, 1);
@@ -358,7 +396,7 @@ function registerCodeLensCommands(
         if (!board) return;
 
         for (const column of board.columns) {
-          const task = column.tasks.find(t => t.id === taskId);
+          const task = column.tasks.find((t: Task) => t.id === taskId);
           if (task) {
             task.priority = selected as 'critical' | 'high' | 'medium' | 'low';
             const newContent = BrainfileSerializer.serialize(board);
@@ -390,7 +428,7 @@ function registerCodeLensCommands(
         // Find the task
         let targetTask = null;
         for (const column of board.columns) {
-          const task = column.tasks.find(t => t.id === taskId);
+          const task = column.tasks.find((t: Task) => t.id === taskId);
           if (task) {
             targetTask = task;
             break;
@@ -458,8 +496,18 @@ function registerCodeLensCommands(
 
   // Lint & Sort command
   context.subscriptions.push(
-    vscode.commands.registerCommand('brainfile.codelens.lintAndSort', async (uri: vscode.Uri) => {
+    vscode.commands.registerCommand('brainfile.codelens.lintAndSort', async (uri?: vscode.Uri) => {
       try {
+        // If no URI provided, use the active editor's document
+        if (!uri) {
+          const activeEditor = vscode.window.activeTextEditor;
+          if (!activeEditor) {
+            vscode.window.showErrorMessage('No active editor found');
+            return;
+          }
+          uri = activeEditor.document.uri;
+        }
+        
         const content = fs.readFileSync(uri.fsPath, 'utf8');
         const board = BrainfileParser.parse(content);
 
@@ -472,7 +520,7 @@ function registerCodeLensCommands(
 
         if (sortedBoard && sortedBoard.columns.length > 0) {
           // Sort columns by order property (ascending)
-          sortedBoard.columns.sort((a, b) => {
+          sortedBoard.columns.sort((a: Column, b: Column) => {
             const orderA = a.order ?? Number.MAX_SAFE_INTEGER;
             const orderB = b.order ?? Number.MAX_SAFE_INTEGER;
             return orderA - orderB;
@@ -518,6 +566,96 @@ function registerCodeLensCommands(
 
       } catch (error) {
         vscode.window.showErrorMessage(`Lint & Sort failed: ${error}`);
+      }
+    })
+  );
+
+  // Lint on Save feature
+  const diagnosticCollection = vscode.languages.createDiagnosticCollection('brainfile');
+  context.subscriptions.push(diagnosticCollection);
+
+  // Validate and optionally fix brainfile on save
+  context.subscriptions.push(
+    vscode.workspace.onWillSaveTextDocument(async (event) => {
+      const document = event.document;
+      
+      // Only process brainfile.md files
+      if (!document.fileName.endsWith('brainfile.md')) {
+        return;
+      }
+
+      const config = vscode.workspace.getConfiguration('brainfile');
+      const lintOnSave = config.get<boolean>('lintOnSave', false);
+      const autoFixOnSave = config.get<boolean>('autoFixOnSave', false);
+
+      if (!lintOnSave) {
+        return;
+      }
+
+      const content = document.getText();
+      const lintResult = BrainfileLinter.lint(content, { autoFix: autoFixOnSave });
+
+      // Convert lint issues to VS Code diagnostics
+      // Only create diagnostics for issues with line numbers (YAML syntax errors)
+      // Validation errors without line numbers are logged but not shown inline
+      const diagnostics: vscode.Diagnostic[] = lintResult.issues
+        .filter(issue => issue.line !== undefined && issue.line > 0)
+        .map(issue => {
+          const line = Math.max(0, issue.line! - 1); // Convert to 0-based
+          const range = new vscode.Range(line, 0, line, document.lineAt(line).text.length);
+          const severity = issue.type === 'error' 
+            ? vscode.DiagnosticSeverity.Error 
+            : vscode.DiagnosticSeverity.Warning;
+          
+          const diagnostic = new vscode.Diagnostic(
+            range,
+            issue.message,
+            severity
+          );
+          
+          diagnostic.source = 'brainfile';
+          if (issue.fixable) {
+            diagnostic.code = 'fixable';
+          }
+          
+          return diagnostic;
+        });
+
+      // Log validation errors (without line numbers) to output channel
+      const validationErrors = lintResult.issues.filter(issue => !issue.line);
+      if (validationErrors.length > 0) {
+        log(`Validation errors in ${document.fileName}:`);
+        validationErrors.forEach(issue => {
+          log(`  ${issue.type.toUpperCase()}: ${issue.message}`);
+        });
+      }
+
+      diagnosticCollection.set(document.uri, diagnostics);
+
+      // Auto-fix if enabled and there are fixable issues
+      if (autoFixOnSave && lintResult.fixedContent && lintResult.fixedContent !== content) {
+        const edit = new vscode.WorkspaceEdit();
+        const fullRange = new vscode.Range(
+          document.positionAt(0),
+          document.positionAt(content.length)
+        );
+        edit.replace(document.uri, fullRange, lintResult.fixedContent);
+        
+        // Wait for the edit to complete
+        event.waitUntil(vscode.workspace.applyEdit(edit));
+        
+        log(`Auto-fixed ${lintResult.issues.filter(i => i.fixable).length} issue(s) on save`);
+      } else if (diagnostics.length > 0) {
+        log(`Found ${diagnostics.length} lint issue(s) in ${document.fileName}`);
+      }
+    })
+  );
+
+  // Clear diagnostics when document is closed
+  context.subscriptions.push(
+    vscode.workspace.onDidCloseTextDocument(document => {
+      if (document.fileName.endsWith('brainfile.md')) {
+        diagnosticCollection.delete(document.uri);
       }
     })
   );

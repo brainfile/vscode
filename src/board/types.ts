@@ -68,7 +68,7 @@ export type WebviewToExtensionMessage =
 /** Messages sent FROM extension TO webview */
 export type ExtensionToWebviewMessage =
   | { type: "agentsDetected"; agents: DetectedAgent[]; defaultAgent: AgentType; lastUsed: AgentType }
-  | { type: "parseWarning"; message: string }
+  | { type: "parseWarning"; message: string; lintResult?: LintResult }
   | { type: "boardUpdate"; board: Board | null; priorityStyles?: string };
 
 /** Rule types for agent instructions */

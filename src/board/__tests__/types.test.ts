@@ -16,11 +16,7 @@ describe("board/types", () => {
     it("AGENT_TYPES contains all expected agents", () => {
       expect(AGENT_TYPES).toEqual([
         "copilot",
-        "cursor",
-        "cline",
-        "kilo-code",
         "claude-code",
-        "continue",
         "copy",
       ]);
     });
@@ -62,7 +58,6 @@ describe("board/types", () => {
   describe("isAgentType", () => {
     it("returns true for valid agent types", () => {
       expect(isAgentType("copilot")).toBe(true);
-      expect(isAgentType("cursor")).toBe(true);
       expect(isAgentType("claude-code")).toBe(true);
       expect(isAgentType("copy")).toBe(true);
     });
@@ -157,7 +152,7 @@ describe("board/types", () => {
       const state2 = createInitialBoardState();
 
       state1.parseErrorCount = 5;
-      state1.lastUsedAgent = "cursor";
+      state1.lastUsedAgent = "claude-code";
 
       expect(state2.parseErrorCount).toBe(0);
       expect(state2.lastUsedAgent).toBe("copilot");

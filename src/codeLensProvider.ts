@@ -28,11 +28,8 @@ export class BrainfileCodeLensProvider implements vscode.CodeLensProvider {
 
     try {
       const board = BrainfileParser.parse(content);
-      if (!board) {
-        return [];
-      }
-
-      // Add frontmatter-level CodeLens (at line 0, the opening ---)
+      
+      // Always show basic CodeLens (even if parsing fails)
       codeLenses.push(
         new vscode.CodeLens(new vscode.Range(0, 0, 0, 0), {
           title: "$(preview) Open Board",
@@ -58,6 +55,12 @@ export class BrainfileCodeLensProvider implements vscode.CodeLensProvider {
         })
       );
       usedLines.add(0);
+      
+      // If parsing failed, return early with basic lenses
+      if (!board) {
+        log("Parse failed - showing basic CodeLens only");
+        return codeLenses;
+      }
 
       // Find and add CodeLens for each column
       for (const column of board.columns) {
@@ -103,7 +106,7 @@ export class BrainfileCodeLensProvider implements vscode.CodeLensProvider {
               new vscode.CodeLens(new vscode.Range(taskLocation, 0, taskLocation, 0), {
                 title: "$(arrow-right) Move",
                 command: "brainfile.codelens.moveTask",
-                arguments: [document.uri, column.id, task.id, board.columns.map(c => ({ id: c.id, title: c.title }))],
+                arguments: [document.uri, column.id, task.id, board.columns.map((c: Column) => ({ id: c.id, title: c.title }))],
                 tooltip: "Move to another column",
               }),
               new vscode.CodeLens(new vscode.Range(taskLocation, 0, taskLocation, 0), {
