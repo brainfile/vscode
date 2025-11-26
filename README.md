@@ -17,8 +17,10 @@ Brainfile provides a visual kanban board interface for managing tasks defined in
 - ✅ **Progress Tracking** - Subtask completion and visual indicators
 - 🎨 **Priority Levels** - Color-coded task priorities (low, medium, high, critical)
 - 🏷️ **Tag Support** - Organize and filter tasks with tags
-- 📏 **Project Rules** - Define always/never/prefer/context rules for your team
-- 🤖 **AI-Friendly** - Designed for seamless AI agent integration
+- 📏 **Project Rules** - Define always/never/prefer/context rules with inline editing
+- 📦 **Archive Management** - Search, restore, or permanently delete archived tasks
+- 🔢 **Bulk Operations** - Multi-select tasks for batch move, archive, delete, or priority changes
+- 🤖 **AI-Friendly** - Designed for seamless AI agent integration with send-to-agent support
 
 ## 🚀 Quick Start
 

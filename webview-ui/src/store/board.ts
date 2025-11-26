@@ -218,16 +218,8 @@ export const useBoardStore = defineStore("board", () => {
     sendMessage({ type: "clearCache" });
   }
 
-  function addRule(ruleType: string) {
-    sendMessage({ type: "addRule", ruleType });
-  }
-
   function addRuleInline(ruleType: string, ruleText: string) {
     sendMessage({ type: "addRuleInline", ruleType, ruleText });
-  }
-
-  function editRule(ruleId: number, ruleType: string) {
-    sendMessage({ type: "editRule", ruleId, ruleType });
   }
 
   function updateRule(ruleId: number, ruleType: string, ruleText: string) {
@@ -329,9 +321,7 @@ export const useBoardStore = defineStore("board", () => {
     refresh,
     openSettings,
     clearCache,
-    addRule,
     addRuleInline,
-    editRule,
     updateRule,
     deleteRule,
     // Bulk operations

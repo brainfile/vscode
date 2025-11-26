@@ -9,6 +9,7 @@ import {
 	type Column,
 	type DiscoveredFile,
 	discover,
+	findPrimaryBrainfile,
 	hashBoardContent,
 	type Rule,
 	type Task,
@@ -500,14 +501,8 @@ columns:
 				case "addTaskToColumn":
 					this.handleAddTaskToColumn(data.columnId)
 					break
-				case "addRule":
-					this.handleAddRule(data.ruleType)
-					break
 				case "addRuleInline":
 					this.handleAddRuleInline(data.ruleType, data.ruleText)
-					break
-				case "editRule":
-					this.handleEditRule(data.ruleId, data.ruleType)
 					break
 				case "updateRule":
 					this.handleUpdateRule(data.ruleId, data.ruleType, data.ruleText)
@@ -576,29 +571,17 @@ columns:
 
 		const rootPath = workspaceFolders[0].uri.fsPath
 
-		// Check for non-hidden brainfile.md first (new default)
-		const nonHiddenPath = path.join(rootPath, "brainfile.md")
-		if (fs.existsSync(nonHiddenPath)) {
-			this._boardFilePath = nonHiddenPath
-			return
-		}
-
-		// Check for hidden .brainfile.md (backward compatibility)
-		const hiddenPath = path.join(rootPath, ".brainfile.md")
-		if (fs.existsSync(hiddenPath)) {
-			this._boardFilePath = hiddenPath
-			return
-		}
-
-		// Check for .bb.md (shorthand - backward compatibility)
-		const bbPath = path.join(rootPath, ".bb.md")
-		if (fs.existsSync(bbPath)) {
-			this._boardFilePath = bbPath
+		// Use core's findPrimaryBrainfile for consistent discovery
+		// Priority: brainfile.md > .brainfile.md > .bb.md > brainfile.*.md
+		const primary = findPrimaryBrainfile(rootPath)
+		if (primary) {
+			this._boardFilePath = primary.absolutePath
 			return
 		}
 
 		// If no file exists, create default brainfile.md (non-hidden)
-		await this.createDefaultBrainfileFile(nonHiddenPath)
+		const defaultPath = path.join(rootPath, "brainfile.md")
+		await this.createDefaultBrainfileFile(defaultPath)
 	}
 
 	private async createDefaultBrainfileFile(filePath: string) {
@@ -1527,15 +1510,11 @@ columns:
 	private getArchivePath(): string | undefined {
 		if (!this._boardFilePath) return
 
-		const workspaceFolders = vscode.workspace.workspaceFolders
-		if (!workspaceFolders || workspaceFolders.length === 0) return
-
-		const rootPath = workspaceFolders[0].uri.fsPath
-
-		// Determine archive filename based on main board filename
+		// Archive file lives in the same directory as the board file
+		const boardDir = path.dirname(this._boardFilePath)
 		const mainFilename = path.basename(this._boardFilePath)
 		const archiveFilename = mainFilename.replace(/\.md$/, "-archive.md")
-		return path.join(rootPath, archiveFilename)
+		return path.join(boardDir, archiveFilename)
 	}
 
 	private loadArchive(board: Board) {
@@ -1625,67 +1604,6 @@ columns:
 		this.persistAndRefresh(result.board, `Subtask ${subtaskId} toggled`)
 	}
 
-	private async handleAddRule(ruleType: "always" | "never" | "prefer" | "context") {
-		if (!this._boardFilePath) return
-
-		// Show quick input for rule text
-		const ruleText = await vscode.window.showInputBox({
-			prompt: `Add ${ruleType.toUpperCase()} rule`,
-			placeHolder: `Enter the rule text for ${ruleType}`,
-			validateInput: (value) => {
-				if (!value || value.trim().length === 0) {
-					return "Rule text is required"
-				}
-				return null
-			},
-		})
-
-		if (!ruleText) return
-
-		// Read current board
-		const content = fs.readFileSync(this._boardFilePath, "utf8")
-		const board = BrainfileParser.parse(content)
-		if (!board) return
-
-		// Initialize rules if not present
-		if (!board.rules) {
-			board.rules = {
-				always: [],
-				never: [],
-				prefer: [],
-				context: [],
-			}
-		}
-
-		// Ensure the rule type array exists
-		if (!board.rules[ruleType]) {
-			board.rules[ruleType] = []
-		}
-
-		// Generate next rule ID for this type
-		const existingIds = board.rules[ruleType].map((r: Rule) => r.id)
-		const maxId = Math.max(0, ...existingIds)
-		const newRuleId = maxId + 1
-
-		// Add the new rule
-		board.rules[ruleType].push({
-			id: newRuleId,
-			rule: ruleText.trim(),
-		})
-
-		// Save the updated board
-		const newContent = BrainfileSerializer.serialize(board)
-		fs.writeFileSync(this._boardFilePath, newContent, "utf8")
-
-		// Update hash to prevent double update
-		this._lastContentHash = this.hashContent(newContent)
-
-		log(`Added new ${ruleType} rule with id ${newRuleId}`)
-
-		// Update the view with the new content
-		this.updateView(false, newContent)
-	}
-
 	private handleAddRuleInline(ruleType: string, ruleText: string) {
 		if (!this._boardFilePath) return
 
@@ -1767,61 +1685,6 @@ columns:
 		this.updateView(false, newContent)
 	}
 
-	private async handleEditRule(ruleId: string, ruleType: "always" | "never" | "prefer" | "context") {
-		if (!this._boardFilePath) return
-
-		try {
-			log(`Opening rule ${ruleId} in ${ruleType} section in editor`)
-
-			// Read the file content
-			const content = fs.readFileSync(this._boardFilePath, "utf8")
-
-			// Convert ruleId to number and find the rule location
-			const ruleIdNum = parseInt(ruleId, 10)
-			const location = BrainfileParser.findRuleLocation(content, ruleIdNum, ruleType)
-
-			if (!location) {
-				vscode.window.showErrorMessage(`Could not find rule ${ruleId} in ${ruleType} section`)
-				return
-			}
-
-			// Check if the document is already open in a visible editor
-			const uri = vscode.Uri.file(this._boardFilePath)
-			let editor = vscode.window.visibleTextEditors.find((editor) => editor.document.uri.toString() === uri.toString())
-
-			if (editor) {
-				// Document is already open, just focus it and move cursor
-				const position = new vscode.Position(location.line - 1, location.column)
-				const range = new vscode.Range(position, position)
-
-				editor.selection = new vscode.Selection(position, position)
-				editor.revealRange(range, vscode.TextEditorRevealType.InCenter)
-
-				// Focus the existing editor
-				await vscode.window.showTextDocument(editor.document, {
-					viewColumn: editor.viewColumn,
-					preserveFocus: false,
-				})
-			} else {
-				// Document is not open, open it in a new editor
-				const document = await vscode.workspace.openTextDocument(uri)
-				const position = new vscode.Position(location.line - 1, location.column)
-				const range = new vscode.Range(position, position)
-
-				editor = await vscode.window.showTextDocument(document, {
-					selection: range,
-					viewColumn: vscode.ViewColumn.Beside, // Open beside the webview
-					preserveFocus: false, // Give focus to the editor
-				})
-			}
-
-			log(`Opened editor at line ${location.line} for rule ${ruleId}`)
-		} catch (error) {
-			log("Error opening rule in editor:", error)
-			vscode.window.showErrorMessage("Failed to open rule in editor")
-		}
-	}
-
 	private async handleDeleteRule(ruleId: string, ruleType: "always" | "never" | "prefer" | "context") {
 		if (!this._boardFilePath) return
 
@@ -1893,13 +1756,8 @@ columns:
 		this._lastContentHash = this.hashContent(newContent)
 
 		// Get archive file path
-		const workspaceFolders = vscode.workspace.workspaceFolders
-		if (!workspaceFolders) return
-
-		const rootPath = workspaceFolders[0].uri.fsPath
-		const mainFilename = path.basename(this._boardFilePath)
-		const archiveFilename = mainFilename.replace(/\.md$/, "-archive.md")
-		const archivePath = path.join(rootPath, archiveFilename)
+		const archivePath = this.getArchivePath()
+		if (!archivePath) return
 
 		// Read or create archive file
 		let archiveBoard: Board
@@ -1937,19 +1795,35 @@ columns:
 
 		log(`Restoring task ${taskId} from archive`)
 
-		// Read main board
-		const content = fs.readFileSync(this._boardFilePath, "utf8")
-		const board = BrainfileParser.parse(content)
-		if (!board) return
+		// Archive is stored in a separate file
+		const archivePath = this.getArchivePath()
+		if (!archivePath || !fs.existsSync(archivePath)) {
+			log("Archive file not found")
+			vscode.window.showErrorMessage("No archive file found")
+			return
+		}
+
+		// Read archive file to find the task
+		const archiveContent = fs.readFileSync(archivePath, "utf8")
+		const archiveBoard = BrainfileParser.parse(archiveContent)
+		if (!archiveBoard?.archive) {
+			log("No archive in archive file")
+			return
+		}
 
 		// Find task in archive
-		const archiveIndex = board.archive?.findIndex((t: Task) => t.id === taskId)
-		if (archiveIndex === undefined || archiveIndex === -1 || !board.archive) {
+		const archiveIndex = archiveBoard.archive.findIndex((t: Task) => t.id === taskId)
+		if (archiveIndex === -1) {
 			log("Task not found in archive")
 			return
 		}
 
-		const taskToRestore = board.archive[archiveIndex]
+		const taskToRestore = archiveBoard.archive[archiveIndex]
+
+		// Read main board
+		const content = fs.readFileSync(this._boardFilePath, "utf8")
+		const board = BrainfileParser.parse(content)
+		if (!board) return
 
 		// No columns available
 		if (!board.columns || board.columns.length === 0) {
@@ -1978,18 +1852,24 @@ columns:
 			return
 		}
 
-		// Re-read the board in case it changed while Quick Pick was open
-		const freshContent = fs.readFileSync(this._boardFilePath, "utf8")
-		const freshBoard = BrainfileParser.parse(freshContent)
-		if (!freshBoard) return
+		// Re-read both files in case they changed while Quick Pick was open
+		const freshArchiveContent = fs.readFileSync(archivePath, "utf8")
+		const freshArchiveBoard = BrainfileParser.parse(freshArchiveContent)
+		if (!freshArchiveBoard?.archive) {
+			log("Archive no longer available")
+			return
+		}
 
-		// Re-find task in archive (it might have moved)
-		const freshArchiveIndex = freshBoard.archive?.findIndex((t: Task) => t.id === taskId)
-		if (freshArchiveIndex === undefined || freshArchiveIndex === -1 || !freshBoard.archive) {
+		const freshArchiveIndex = freshArchiveBoard.archive.findIndex((t: Task) => t.id === taskId)
+		if (freshArchiveIndex === -1) {
 			log("Task no longer in archive")
 			vscode.window.showWarningMessage("Task is no longer in the archive")
 			return
 		}
+
+		const freshContent = fs.readFileSync(this._boardFilePath, "utf8")
+		const freshBoard = BrainfileParser.parse(freshContent)
+		if (!freshBoard) return
 
 		// Find target column
 		const targetColumn = freshBoard.columns.find((c: Column) => c.id === selectedColumn.id)
@@ -1999,11 +1879,13 @@ columns:
 			return
 		}
 
-		// Remove from archive and add to column
-		const restoredTask = freshBoard.archive.splice(freshArchiveIndex, 1)[0]
-		targetColumn.tasks.unshift(restoredTask)
+		// Remove from archive file
+		const restoredTask = freshArchiveBoard.archive.splice(freshArchiveIndex, 1)[0]
+		const newArchiveContent = BrainfileSerializer.serialize(freshArchiveBoard)
+		fs.writeFileSync(archivePath, newArchiveContent, "utf8")
 
-		// Save the board
+		// Add to target column in main board
+		targetColumn.tasks.unshift(restoredTask)
 		const newContent = BrainfileSerializer.serialize(freshBoard)
 		fs.writeFileSync(this._boardFilePath, newContent, "utf8")
 
@@ -2022,33 +1904,39 @@ columns:
 
 		log(`Permanently deleting archived task ${taskId}`)
 
-		// Read main board
-		const content = fs.readFileSync(this._boardFilePath, "utf8")
-		const board = BrainfileParser.parse(content)
-		if (!board) return
+		// Archive is stored in separate file, update it directly
+		const archivePath = this.getArchivePath()
+		if (!archivePath || !fs.existsSync(archivePath)) {
+			log("Archive file not found")
+			return
+		}
+
+		const archiveContent = fs.readFileSync(archivePath, "utf8")
+		const archiveBoard = BrainfileParser.parse(archiveContent)
+		if (!archiveBoard?.archive) {
+			log("No archive in archive file")
+			return
+		}
 
 		// Find task in archive
-		const archiveIndex = board.archive?.findIndex((t: Task) => t.id === taskId)
-		if (archiveIndex === undefined || archiveIndex === -1 || !board.archive) {
+		const archiveIndex = archiveBoard.archive.findIndex((t: Task) => t.id === taskId)
+		if (archiveIndex === -1) {
 			log("Task not found in archive")
 			return
 		}
 
 		// Remove from archive
-		const deletedTask = board.archive.splice(archiveIndex, 1)[0]
+		const deletedTask = archiveBoard.archive.splice(archiveIndex, 1)[0]
 
-		// Save the board
-		const newContent = BrainfileSerializer.serialize(board)
-		fs.writeFileSync(this._boardFilePath, newContent, "utf8")
-
-		// Update hash to prevent double update
-		this._lastContentHash = this.hashContent(newContent)
+		// Save the archive file
+		const newArchiveContent = BrainfileSerializer.serialize(archiveBoard)
+		fs.writeFileSync(archivePath, newArchiveContent, "utf8")
 
 		log("Archived task deleted permanently")
 		vscode.window.showInformationMessage(`Task "${deletedTask.title}" permanently deleted`)
 
-		// Immediately update the view with the new content
-		this.updateView(false, newContent)
+		// Refresh the view to reflect the change
+		this.updateView(false)
 	}
 
 	private handleBulkMoveTasks(taskIds: string[], toColumnId: string) {
@@ -2102,13 +1990,8 @@ columns:
 		this._lastContentHash = this.hashContent(newContent)
 
 		// Now save archived tasks to archive file
-		const workspaceFolders = vscode.workspace.workspaceFolders
-		if (workspaceFolders && archivedTasks.length > 0) {
-			const rootPath = workspaceFolders[0].uri.fsPath
-			const mainFilename = path.basename(this._boardFilePath)
-			const archiveFilename = mainFilename.replace(/\.md$/, "-archive.md")
-			const archivePath = path.join(rootPath, archiveFilename)
-
+		const archivePath = this.getArchivePath()
+		if (archivePath && archivedTasks.length > 0) {
 			let archiveBoard: Board
 			if (fs.existsSync(archivePath)) {
 				const archiveContent = fs.readFileSync(archivePath, "utf8")

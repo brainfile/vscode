@@ -202,10 +202,6 @@ function handleAddRule(payload: { ruleType: string; ruleText: string }) {
   boardStore.addRuleInline(payload.ruleType, payload.ruleText);
 }
 
-function handleEditRule(payload: { ruleId: number; ruleType: string }) {
-  boardStore.editRule(payload.ruleId, payload.ruleType);
-}
-
 function handleUpdateRule(payload: { ruleId: number; ruleType: string; ruleText: string }) {
   boardStore.updateRule(payload.ruleId, payload.ruleType, payload.ruleText);
 }
@@ -395,7 +391,6 @@ function handleTaskAction(payload: { columnId: string; taskId: string }) {
         <RulesPanel
           :rules="board?.rules"
           @add-rule="handleAddRule"
-          @edit-rule="handleEditRule"
           @update-rule="handleUpdateRule"
           @delete-rule="handleDeleteRule"
         />

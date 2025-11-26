@@ -2,7 +2,7 @@
   "name": "brainfile",
   "displayName": "Brainfile",
   "description": "Protocol-first task management for AI-assisted development. Visual kanban board for brainfile.md files.",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "publisher": "brainfile",
   "license": "MIT",
   "icon": "icon.png",

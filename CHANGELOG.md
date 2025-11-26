@@ -5,6 +5,56 @@ All notable changes to the Brainfile VSCode extension will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2025-11-26
+
+### Fixed
+
+#### Archive Restore Bug
+- **Fixed restore from archive** - Restore button now properly reads from the separate archive file (`brainfile-archive.md`) instead of the main board file
+- Archive operations (restore, delete) now correctly update the archive file
+
+#### Archive Path Bug
+- **Fixed nested directory archives** - Archive files now correctly placed next to their board file (e.g., `projects/brainfile.md` → `projects/brainfile-archive.md` instead of workspace root)
+
+#### Unified File Discovery
+- Both sidebar and tab views now use `findPrimaryBrainfile()` from core for consistent file discovery
+- Priority order: `brainfile.md` > `.brainfile.md` > `.bb.md` > `brainfile.*.md`
+
+### Changed
+
+#### Rules Panel Cleanup
+- Removed dead `editRule` code path (file editor opening)
+- Removed modal `addRule` pattern - now inline-only
+- Consolidated to `addRuleInline` and `updateRule` for cleaner UX
+- Fixed input border color to use `--c-border-input` for consistency
+- Added ARIA roles (`role="list"`, `role="listitem"`) for accessibility
+
+## [0.10.0] - 2025-11-25
+
+### Added
+
+#### Archive Panel
+- **Full archive management** with search, restore, and permanent delete
+- Search archived tasks by title, description, or ID
+- Restore tasks to any column (user selects via Quick Pick)
+- Permanent delete with confirmation dialog
+- Collapsible task details with related files
+
+#### Column Selection Helpers
+- **Dynamic column detection** - No more hardcoded "todo"/"done" assumptions
+- `findCompletionColumn()` finds columns matching done/complete/finished/closed
+- `isCompletionColumn()` helper for checking column type
+- `handleCompleteTask()` moves tasks to completion column dynamically
+
+#### Bulk Operations Improvements
+- Bulk archive now properly writes to separate archive file
+- Bulk move, delete, and patch operations with proper error handling
+
+### Fixed
+- Search box width now fills available space
+- Search placeholder changed from "Search tasks..." to "Search..."
+- Column persistence and selection helpers for protocol flexibility
+
 ## [0.9.0] - 2025-11-25
 
 ### Added

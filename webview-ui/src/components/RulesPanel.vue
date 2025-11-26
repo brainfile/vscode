@@ -9,7 +9,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "add-rule", payload: { ruleType: string; ruleText: string }): void;
-  (e: "edit-rule", payload: { ruleId: number; ruleType: string }): void;
   (e: "update-rule", payload: { ruleId: number; ruleType: string; ruleText: string }): void;
   (e: "delete-rule", payload: { ruleId: number; ruleType: string }): void;
 }>();
@@ -109,10 +108,11 @@ function handleAddKeydown(event: KeyboardEvent) {
         <span class="count">{{ props.rules?.[type.key]?.length || 0 }}</span>
       </header>
 
-      <ul class="list-none">
+      <ul class="list-none" role="list">
         <li
           v-for="rule in props.rules?.[type.key] ?? []"
           :key="rule.id"
+          role="listitem"
           class="list-item hover-reveal items-start"
         >
           <span class="id-badge flex-shrink-0 pt-1">#{{ rule.id }}</span>
@@ -229,7 +229,7 @@ function handleAddKeydown(event: KeyboardEvent) {
   line-height: var(--leading-normal);
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
-  border: 1px solid var(--vscode-focusBorder);
+  border: 1px solid var(--c-border-input);
   border-radius: 4px;
   resize: vertical;
   min-height: 40px;

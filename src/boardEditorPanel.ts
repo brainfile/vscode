@@ -7,6 +7,7 @@ import {
 	BrainfileSerializer,
 	type Column,
 	discover,
+	findPrimaryBrainfile,
 	hashBoardContent,
 	type Rule,
 	type Task,
@@ -207,25 +208,11 @@ export class BoardEditorPanel {
 
 		const rootPath = workspaceFolders[0].uri.fsPath
 
-		// Use discover to find all brainfiles and use the first (highest priority) one
-		const result = discover(rootPath)
-		if (result.files.length > 0) {
-			this._boardFilePath = result.files[0].absolutePath
-			return
-		}
-
-		// Fallback: check standard paths manually (in case discover has issues)
-		const standardPaths = [
-			path.join(rootPath, "brainfile.md"),
-			path.join(rootPath, ".brainfile.md"),
-			path.join(rootPath, ".bb.md"),
-		]
-
-		for (const p of standardPaths) {
-			if (fs.existsSync(p)) {
-				this._boardFilePath = p
-				return
-			}
+		// Use core's findPrimaryBrainfile for consistent discovery
+		// Priority: brainfile.md > .brainfile.md > .bb.md > brainfile.*.md
+		const primary = findPrimaryBrainfile(rootPath)
+		if (primary) {
+			this._boardFilePath = primary.absolutePath
 		}
 	}
 
@@ -443,11 +430,11 @@ export class BoardEditorPanel {
 			case "addTaskToColumn":
 				this._handleAddTaskToColumn(data.columnId)
 				break
-			case "addRule":
-				this._handleAddRule(data.ruleType)
+			case "addRuleInline":
+				this._handleAddRuleInline(data.ruleType, data.ruleText)
 				break
-			case "editRule":
-				this._handleEditRule(data.ruleId, data.ruleType)
+			case "updateRule":
+				this._handleUpdateRule(data.ruleId, data.ruleType, data.ruleText)
 				break
 			case "deleteRule":
 				this._handleDeleteRule(data.ruleId, data.ruleType)
@@ -851,17 +838,10 @@ export class BoardEditorPanel {
 		this._persistAndRefresh(result.board, `Subtask ${subtaskId} toggled`)
 	}
 
-	private async _handleAddRule(ruleType: "always" | "never" | "prefer" | "context") {
+	private _handleAddRuleInline(ruleType: string, ruleText: string) {
 		if (!this._boardFilePath) return
 
-		const ruleText = await vscode.window.showInputBox({
-			prompt: `Add ${ruleType.toUpperCase()} rule`,
-			placeHolder: `Enter the rule text`,
-			validateInput: (value) => (!value?.trim() ? "Rule text is required" : null),
-		})
-
-		if (!ruleText) return
-
+		const validType = ruleType as "always" | "never" | "prefer" | "context"
 		const content = fs.readFileSync(this._boardFilePath, "utf8")
 		const board = BrainfileParser.parse(content)
 		if (!board) return
@@ -869,38 +849,30 @@ export class BoardEditorPanel {
 		if (!board.rules) {
 			board.rules = { always: [], never: [], prefer: [], context: [] }
 		}
-		if (!board.rules[ruleType]) {
-			board.rules[ruleType] = []
+		if (!board.rules[validType]) {
+			board.rules[validType] = []
 		}
 
-		const existingIds = board.rules[ruleType].map((r: Rule) => r.id)
+		const existingIds = board.rules[validType].map((r: Rule) => r.id)
 		const maxId = Math.max(0, ...existingIds)
-		board.rules[ruleType].push({ id: maxId + 1, rule: ruleText.trim() })
+		board.rules[validType].push({ id: maxId + 1, rule: ruleText.trim() })
 
-		this._persistAndRefresh(board, `Added ${ruleType} rule`)
+		this._persistAndRefresh(board, `Added ${validType} rule`)
 	}
 
-	private async _handleEditRule(ruleId: string, ruleType: "always" | "never" | "prefer" | "context") {
+	private _handleUpdateRule(ruleId: number, ruleType: string, ruleText: string) {
 		if (!this._boardFilePath) return
 
+		const validType = ruleType as "always" | "never" | "prefer" | "context"
 		const content = fs.readFileSync(this._boardFilePath, "utf8")
-		const ruleIdNum = parseInt(ruleId, 10)
-		const location = BrainfileParser.findRuleLocation(content, ruleIdNum, ruleType)
+		const board = BrainfileParser.parse(content)
+		if (!board?.rules?.[validType]) return
 
-		if (!location) {
-			vscode.window.showErrorMessage(`Could not find rule ${ruleId}`)
-			return
-		}
+		const rule = board.rules[validType].find((r: Rule) => r.id === ruleId)
+		if (!rule) return
 
-		const uri = vscode.Uri.file(this._boardFilePath)
-		const document = await vscode.workspace.openTextDocument(uri)
-		const position = new vscode.Position(location.line - 1, location.column)
-
-		await vscode.window.showTextDocument(document, {
-			selection: new vscode.Range(position, position),
-			viewColumn: vscode.ViewColumn.Beside,
-			preserveFocus: false,
-		})
+		rule.rule = ruleText.trim()
+		this._persistAndRefresh(board, `Updated ${validType} rule ${ruleId}`)
 	}
 
 	private async _handleDeleteRule(ruleId: string, ruleType: "always" | "never" | "prefer" | "context") {
@@ -988,13 +960,11 @@ export class BoardEditorPanel {
 	private _getArchivePath(): string | undefined {
 		if (!this._boardFilePath) return
 
-		const workspaceFolders = vscode.workspace.workspaceFolders
-		if (!workspaceFolders?.length) return
-
-		const rootPath = workspaceFolders[0].uri.fsPath
+		// Archive file lives in the same directory as the board file
+		const boardDir = path.dirname(this._boardFilePath)
 		const mainFilename = path.basename(this._boardFilePath)
 		const archiveFilename = mainFilename.replace(/\.md$/, "-archive.md")
-		return path.join(rootPath, archiveFilename)
+		return path.join(boardDir, archiveFilename)
 	}
 
 	private _loadArchive(board: Board) {
