@@ -88,7 +88,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
 	 * Switch to a different brainfile (public API for commands)
 	 */
 	public switchToFile(filePath: string): void {
-		this.handleSwitchFile(filePath)
+		this.switchFile(filePath)
 	}
 
 	/**
@@ -174,14 +174,14 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
 		})
 
 		if (selected) {
-			this.handleSwitchFile(selected.absolutePath)
+			this.switchFile(selected.absolutePath)
 		}
 	}
 
 	/**
 	 * Handle switching to a different brainfile
 	 */
-	private async handleSwitchFile(absolutePath: string) {
+	public async switchFile(absolutePath: string) {
 		if (!absolutePath || !fs.existsSync(absolutePath)) {
 			log(`Cannot switch to file: ${absolutePath}`)
 			return
@@ -221,6 +221,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
 
 		const defaultContent = `---
 title: ${title}
+schema: https://brainfile.md/v1/board.json
 agent:
   instructions:
     - Modify only the YAML frontmatter
@@ -338,11 +339,16 @@ columns:
 		}))
 
 		const selectedColumn = await vscode.window.showQuickPick(columnOptions, {
-			placeHolder: "Select column (default: To Do)",
+			placeHolder: "Select column",
 			canPickMany: false,
 		})
 
-		const columnId = (selectedColumn as { id: string } | undefined)?.id || "todo"
+		// Use selected column, or first column as fallback
+		const columnId = (selectedColumn as { id: string } | undefined)?.id || board.columns[0]?.id
+		if (!columnId) {
+			vscode.window.showErrorMessage("No columns available")
+			return
+		}
 
 		// Optional description
 		const description = await vscode.window.showInputBox({
@@ -467,6 +473,9 @@ columns:
 				case "updateTitle":
 					this.handleUpdateTitle(data.title)
 					break
+				case "updateTaskTitle":
+					this.handleUpdateTaskTitle(data.taskId, data.title)
+					break
 				case "openFile":
 					this.handleOpenFile(data.filePath)
 					break
@@ -479,8 +488,14 @@ columns:
 				case "archiveTask":
 					this.handleArchiveTask(data.columnId, data.taskId)
 					break
+				case "restoreTask":
+					this.handleRestoreTask(data.taskId)
+					break
+				case "deleteArchivedTask":
+					this.handleDeleteArchivedTask(data.taskId)
+					break
 				case "completeTask":
-					this.handleMoveTask(data.taskId, data.columnId, "done", 0)
+					this.handleCompleteTask(data.taskId, data.columnId)
 					break
 				case "addTaskToColumn":
 					this.handleAddTaskToColumn(data.columnId)
@@ -488,8 +503,14 @@ columns:
 				case "addRule":
 					this.handleAddRule(data.ruleType)
 					break
+				case "addRuleInline":
+					this.handleAddRuleInline(data.ruleType, data.ruleText)
+					break
 				case "editRule":
 					this.handleEditRule(data.ruleId, data.ruleType)
+					break
+				case "updateRule":
+					this.handleUpdateRule(data.ruleId, data.ruleType, data.ruleText)
 					break
 				case "deleteRule":
 					this.handleDeleteRule(data.ruleId, data.ruleType)
@@ -513,7 +534,7 @@ columns:
 					this.postAvailableAgents()
 					break
 				case "switchFile":
-					this.handleSwitchFile(data.absolutePath)
+					this.switchFile(data.absolutePath as string)
 					break
 				case "triggerQuickPick":
 					vscode.commands.executeCommand("brainfile.quickSwitch")
@@ -900,13 +921,28 @@ columns:
 		this.persistAndRefresh(result.board, "Task updated successfully")
 	}
 
-	private handleDeleteTask(columnId: string, taskId: string) {
+	private async handleDeleteTask(columnId: string, taskId: string) {
 		if (!this._boardFilePath) return
 
-		log(`Deleting task ${taskId} from column ${columnId}`)
+		// Get task title for confirmation dialog
 		const content = fs.readFileSync(this._boardFilePath, "utf8")
 		const board = BrainfileParser.parse(content)
 		if (!board) return
+
+		const column = board.columns.find((c: Column) => c.id === columnId)
+		const task = column?.tasks.find((t: Task) => t.id === taskId)
+		const taskTitle = task?.title ?? taskId
+
+		// Show confirmation dialog
+		const confirm = await vscode.window.showWarningMessage(
+			`Delete "${taskTitle}"? This cannot be undone.`,
+			"Delete",
+			"Cancel"
+		)
+
+		if (confirm !== "Delete") return
+
+		log(`Deleting task ${taskId} from column ${columnId}`)
 
 		const result = deleteTask(board, columnId, taskId)
 		if (!result.success || !result.board) {
@@ -937,6 +973,72 @@ columns:
 		this.persistAndRefresh(result.board, "Task moved successfully")
 	}
 
+	/**
+	 * Find the "completion" column - the column tasks should move to when marked complete.
+	 * Looks for columns with names like "done", "complete", "finished", etc.
+	 * Falls back to the last column if no match is found.
+	 */
+	private findCompletionColumn(board: Board): Column | undefined {
+		if (!board.columns || board.columns.length === 0) return undefined
+
+		// Common completion column name patterns (case-insensitive)
+		const completionPatterns = [/done/i, /complete/i, /finished/i, /closed/i]
+
+		for (const pattern of completionPatterns) {
+			const match = board.columns.find(
+				(col: Column) => pattern.test(col.title) || pattern.test(col.id),
+			)
+			if (match) return match
+		}
+
+		// Fall back to the last column (common Kanban convention)
+		return board.columns[board.columns.length - 1]
+	}
+
+	/**
+	 * Check if a column is the "completion" column
+	 */
+	private isCompletionColumn(board: Board, columnId: string): boolean {
+		const completionCol = this.findCompletionColumn(board)
+		return completionCol?.id === columnId
+	}
+
+	private async handleCompleteTask(taskId: string, fromColumnId: string) {
+		if (!this._boardFilePath) return
+
+		log(`Completing task ${taskId} from ${fromColumnId}`)
+		const content = fs.readFileSync(this._boardFilePath, "utf8")
+		const board = BrainfileParser.parse(content)
+		if (!board) {
+			log("Failed to parse board")
+			return
+		}
+
+		// Find the completion column
+		const completionColumn = this.findCompletionColumn(board)
+
+		if (!completionColumn) {
+			vscode.window.showErrorMessage("No columns available to complete the task to")
+			return
+		}
+
+		// If already in completion column, show a message
+		if (completionColumn.id === fromColumnId) {
+			vscode.window.showInformationMessage("Task is already in the completion column")
+			return
+		}
+
+		// Move to beginning of completion column
+		const result = moveTask(board, taskId, fromColumnId, completionColumn.id, 0)
+		if (!result.success || !result.board) {
+			log(`Failed to complete task: ${result.error}`)
+			vscode.window.showErrorMessage(`Failed to complete task: ${result.error}`)
+			return
+		}
+
+		this.persistAndRefresh(result.board, `Task moved to ${completionColumn.title}`)
+	}
+
 	private handleUpdateTitle(newTitle: string) {
 		if (!this._boardFilePath) return
 
@@ -952,6 +1054,27 @@ columns:
 		}
 
 		this.persistAndRefresh(result.board, "Board title updated successfully")
+	}
+
+	private handleUpdateTaskTitle(taskId: string, newTitle: string) {
+		if (!this._boardFilePath) return
+
+		log(`Updating task ${taskId} title to: ${newTitle}`)
+		const content = fs.readFileSync(this._boardFilePath, "utf8")
+		const board = BrainfileParser.parse(content)
+		if (!board) return
+
+		// Find the task in any column and update its title
+		for (const column of board.columns) {
+			const task = column.tasks.find((t: Task) => t.id === taskId)
+			if (task) {
+				task.title = newTitle
+				this.persistAndRefresh(board, "Task title updated")
+				return
+			}
+		}
+
+		log(`Task ${taskId} not found`)
 	}
 
 	private async handleEditTask(taskId: string) {
@@ -1563,6 +1686,87 @@ columns:
 		this.updateView(false, newContent)
 	}
 
+	private handleAddRuleInline(ruleType: string, ruleText: string) {
+		if (!this._boardFilePath) return
+
+		const validType = ruleType as "always" | "never" | "prefer" | "context"
+
+		// Read current board
+		const content = fs.readFileSync(this._boardFilePath, "utf8")
+		const board = BrainfileParser.parse(content)
+		if (!board) return
+
+		// Initialize rules if not present
+		if (!board.rules) {
+			board.rules = {
+				always: [],
+				never: [],
+				prefer: [],
+				context: [],
+			}
+		}
+
+		// Ensure the rule type array exists
+		if (!board.rules[validType]) {
+			board.rules[validType] = []
+		}
+
+		// Generate next rule ID for this type
+		const existingIds = board.rules[validType].map((r: Rule) => r.id)
+		const maxId = Math.max(0, ...existingIds)
+		const newRuleId = maxId + 1
+
+		// Add the new rule
+		board.rules[validType].push({
+			id: newRuleId,
+			rule: ruleText.trim(),
+		})
+
+		// Save the updated board
+		const newContent = BrainfileSerializer.serialize(board)
+		fs.writeFileSync(this._boardFilePath, newContent, "utf8")
+
+		// Update hash to prevent double update
+		this._lastContentHash = this.hashContent(newContent)
+
+		log(`Added new ${validType} rule with id ${newRuleId}`)
+
+		// Update the view with the new content
+		this.updateView(false, newContent)
+	}
+
+	private handleUpdateRule(ruleId: number, ruleType: string, ruleText: string) {
+		if (!this._boardFilePath) return
+
+		const validType = ruleType as "always" | "never" | "prefer" | "context"
+
+		// Read current board
+		const content = fs.readFileSync(this._boardFilePath, "utf8")
+		const board = BrainfileParser.parse(content)
+		if (!board || !board.rules || !board.rules[validType]) return
+
+		// Find and update the rule
+		const rule = board.rules[validType].find((r: Rule) => r.id === ruleId)
+		if (!rule) {
+			log(`Rule ${ruleId} not found in ${validType}`)
+			return
+		}
+
+		rule.rule = ruleText.trim()
+
+		// Save the updated board
+		const newContent = BrainfileSerializer.serialize(board)
+		fs.writeFileSync(this._boardFilePath, newContent, "utf8")
+
+		// Update hash to prevent double update
+		this._lastContentHash = this.hashContent(newContent)
+
+		log(`Updated ${validType} rule ${ruleId}`)
+
+		// Update the view with the new content
+		this.updateView(false, newContent)
+	}
+
 	private async handleEditRule(ruleId: string, ruleType: "always" | "never" | "prefer" | "context") {
 		if (!this._boardFilePath) return
 
@@ -1723,6 +1927,125 @@ columns:
 
 		log("Task archived successfully")
 		vscode.window.showInformationMessage(`Task "${taskToArchive.title}" archived`)
+
+		// Immediately update the view with the new content
+		this.updateView(false, newContent)
+	}
+
+	private async handleRestoreTask(taskId: string) {
+		if (!this._boardFilePath) return
+
+		log(`Restoring task ${taskId} from archive`)
+
+		// Read main board
+		const content = fs.readFileSync(this._boardFilePath, "utf8")
+		const board = BrainfileParser.parse(content)
+		if (!board) return
+
+		// Find task in archive
+		const archiveIndex = board.archive?.findIndex((t: Task) => t.id === taskId)
+		if (archiveIndex === undefined || archiveIndex === -1 || !board.archive) {
+			log("Task not found in archive")
+			return
+		}
+
+		const taskToRestore = board.archive[archiveIndex]
+
+		// No columns available
+		if (!board.columns || board.columns.length === 0) {
+			log("No columns available to restore to")
+			vscode.window.showErrorMessage("No columns available to restore the task to")
+			return
+		}
+
+		// Ask user which column to restore to
+		interface ColumnQuickPickItem extends vscode.QuickPickItem {
+			id: string
+		}
+		const columnItems: ColumnQuickPickItem[] = board.columns.map((col: Column) => ({
+			label: col.title,
+			description: `${col.tasks.length} task${col.tasks.length === 1 ? "" : "s"}`,
+			id: col.id,
+		}))
+
+		const selectedColumn = await vscode.window.showQuickPick(columnItems, {
+			placeHolder: `Restore "${taskToRestore.title}" to which column?`,
+			title: "Restore Task",
+		})
+
+		if (!selectedColumn) {
+			log("User cancelled restore")
+			return
+		}
+
+		// Re-read the board in case it changed while Quick Pick was open
+		const freshContent = fs.readFileSync(this._boardFilePath, "utf8")
+		const freshBoard = BrainfileParser.parse(freshContent)
+		if (!freshBoard) return
+
+		// Re-find task in archive (it might have moved)
+		const freshArchiveIndex = freshBoard.archive?.findIndex((t: Task) => t.id === taskId)
+		if (freshArchiveIndex === undefined || freshArchiveIndex === -1 || !freshBoard.archive) {
+			log("Task no longer in archive")
+			vscode.window.showWarningMessage("Task is no longer in the archive")
+			return
+		}
+
+		// Find target column
+		const targetColumn = freshBoard.columns.find((c: Column) => c.id === selectedColumn.id)
+		if (!targetColumn) {
+			log("Target column no longer exists")
+			vscode.window.showWarningMessage("The selected column no longer exists")
+			return
+		}
+
+		// Remove from archive and add to column
+		const restoredTask = freshBoard.archive.splice(freshArchiveIndex, 1)[0]
+		targetColumn.tasks.unshift(restoredTask)
+
+		// Save the board
+		const newContent = BrainfileSerializer.serialize(freshBoard)
+		fs.writeFileSync(this._boardFilePath, newContent, "utf8")
+
+		// Update hash to prevent double update
+		this._lastContentHash = this.hashContent(newContent)
+
+		log("Task restored successfully")
+		vscode.window.showInformationMessage(`Task "${restoredTask.title}" restored to ${targetColumn.title}`)
+
+		// Immediately update the view with the new content
+		this.updateView(false, newContent)
+	}
+
+	private handleDeleteArchivedTask(taskId: string) {
+		if (!this._boardFilePath) return
+
+		log(`Permanently deleting archived task ${taskId}`)
+
+		// Read main board
+		const content = fs.readFileSync(this._boardFilePath, "utf8")
+		const board = BrainfileParser.parse(content)
+		if (!board) return
+
+		// Find task in archive
+		const archiveIndex = board.archive?.findIndex((t: Task) => t.id === taskId)
+		if (archiveIndex === undefined || archiveIndex === -1 || !board.archive) {
+			log("Task not found in archive")
+			return
+		}
+
+		// Remove from archive
+		const deletedTask = board.archive.splice(archiveIndex, 1)[0]
+
+		// Save the board
+		const newContent = BrainfileSerializer.serialize(board)
+		fs.writeFileSync(this._boardFilePath, newContent, "utf8")
+
+		// Update hash to prevent double update
+		this._lastContentHash = this.hashContent(newContent)
+
+		log("Archived task deleted permanently")
+		vscode.window.showInformationMessage(`Task "${deletedTask.title}" permanently deleted`)
 
 		// Immediately update the view with the new content
 		this.updateView(false, newContent)
@@ -1927,8 +2250,8 @@ columns:
 			items.push({ label: `$(edit) Edit in file`, action: "edit-task", columnId, taskId })
 			items.push({ label: `$(tag) Change Priority`, action: "edit-priority", columnId, taskId })
 
-			// State actions
-			if (columnId === "done") {
+			// State actions - show Archive if in completion column, otherwise show Complete
+			if (this.isCompletionColumn(board, columnId)) {
 				items.push({ label: `$(archive) Archive`, action: "archive-task", columnId, taskId })
 			} else {
 				items.push({ label: `$(check) Mark Complete`, action: "complete-task", columnId, taskId })
@@ -1959,7 +2282,7 @@ columns:
 					this.handleArchiveTask(selected.columnId, selected.taskId)
 					break
 				case "complete-task":
-					this.handleMoveTask(selected.taskId, selected.columnId, "done", 0)
+					this.handleCompleteTask(selected.taskId, selected.columnId)
 					break
 				case "delete-task":
 					this.handleDeleteTask(selected.columnId, selected.taskId)

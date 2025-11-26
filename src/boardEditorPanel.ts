@@ -5,6 +5,7 @@ import {
 	BrainfileLinter,
 	BrainfileParser,
 	BrainfileSerializer,
+	type Column,
 	discover,
 	hashBoardContent,
 	type Rule,
@@ -437,7 +438,7 @@ export class BoardEditorPanel {
 				this._handleArchiveTask(data.columnId, data.taskId)
 				break
 			case "completeTask":
-				this._handleMoveTask(data.taskId, data.columnId, "done", 0)
+				this._handleCompleteTask(data.taskId, data.columnId)
 				break
 			case "addTaskToColumn":
 				this._handleAddTaskToColumn(data.columnId)
@@ -540,6 +541,59 @@ export class BoardEditorPanel {
 		if (!result.success || !result.board) return
 
 		this._persistAndRefresh(result.board, "Task moved")
+	}
+
+	/**
+	 * Find the "completion" column - the column tasks should move to when marked complete.
+	 * Looks for columns with names like "done", "complete", "finished", etc.
+	 * Falls back to the last column if no match is found.
+	 */
+	private _findCompletionColumn(board: Board): Column | undefined {
+		if (!board.columns || board.columns.length === 0) return undefined
+
+		// Common completion column name patterns (case-insensitive)
+		const completionPatterns = [/done/i, /complete/i, /finished/i, /closed/i]
+
+		for (const pattern of completionPatterns) {
+			const match = board.columns.find(
+				(col: Column) => pattern.test(col.title) || pattern.test(col.id),
+			)
+			if (match) return match
+		}
+
+		// Fall back to the last column (common Kanban convention)
+		return board.columns[board.columns.length - 1]
+	}
+
+	private _handleCompleteTask(taskId: string, fromColumnId: string) {
+		if (!this._boardFilePath) return
+
+		const content = fs.readFileSync(this._boardFilePath, "utf8")
+		const board = BrainfileParser.parse(content)
+		if (!board) return
+
+		// Find the completion column
+		const completionColumn = this._findCompletionColumn(board)
+
+		if (!completionColumn) {
+			vscode.window.showErrorMessage("No columns available to complete the task to")
+			return
+		}
+
+		// If already in completion column, show a message
+		if (completionColumn.id === fromColumnId) {
+			vscode.window.showInformationMessage("Task is already in the completion column")
+			return
+		}
+
+		// Move to beginning of completion column
+		const result = moveTask(board, taskId, fromColumnId, completionColumn.id, 0)
+		if (!result.success || !result.board) {
+			vscode.window.showErrorMessage(`Failed to complete task: ${result.error}`)
+			return
+		}
+
+		this._persistAndRefresh(result.board, `Task moved to ${completionColumn.title}`)
 	}
 
 	private _handleUpdateTitle(newTitle: string) {

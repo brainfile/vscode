@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import type { Column } from "@brainfile/core";
+import ConfirmDialog from "./ConfirmDialog.vue";
 
-defineProps<{
+const props = defineProps<{
   selectedCount: number;
   columns: Column[];
 }>();
@@ -16,9 +17,26 @@ const emit = defineEmits<{
 }>();
 
 const showMoveDropdown = ref(false);
-const showPriorityDropdown = ref(false);
+const showDeleteConfirm = ref(false);
+
+const moveDropdownWrapper = ref<HTMLElement | null>(null);
 
 const priorities = ["critical", "high", "medium", "low"];
+
+function handleClickOutside(event: MouseEvent) {
+  const target = event.target as Node;
+  if (showMoveDropdown.value && moveDropdownWrapper.value && !moveDropdownWrapper.value.contains(target)) {
+    showMoveDropdown.value = false;
+  }
+}
+
+onMounted(() => {
+  document.addEventListener("click", handleClickOutside);
+});
+
+onUnmounted(() => {
+  document.removeEventListener("click", handleClickOutside);
+});
 
 function handleMove(columnId: string) {
   emit("move", columnId);
@@ -27,7 +45,19 @@ function handleMove(columnId: string) {
 
 function handlePriority(priority: string) {
   emit("set-priority", priority);
-  showPriorityDropdown.value = false;
+}
+
+function requestDelete() {
+  showDeleteConfirm.value = true;
+}
+
+function confirmDelete() {
+  showDeleteConfirm.value = false;
+  emit("delete");
+}
+
+function cancelDelete() {
+  showDeleteConfirm.value = false;
 }
 </script>
 
@@ -40,11 +70,11 @@ function handlePriority(priority: string) {
 
     <div class="actions">
       <!-- Move dropdown -->
-      <div class="dropdown-wrapper">
-        <button class="action-btn" @click="showMoveDropdown = !showMoveDropdown">
-          Move to
+      <div ref="moveDropdownWrapper" class="dropdown-wrapper">
+        <button class="action-btn" @click.stop="showMoveDropdown = !showMoveDropdown">
+          Move {{ selectedCount }}
         </button>
-        <div v-if="showMoveDropdown" class="dropdown">
+        <div v-if="showMoveDropdown" class="dropdown" @click.stop>
           <button
             v-for="col in columns"
             :key="col.id"
@@ -56,31 +86,39 @@ function handlePriority(priority: string) {
         </div>
       </div>
 
-      <!-- Priority dropdown -->
-      <div class="dropdown-wrapper">
-        <button class="action-btn" @click="showPriorityDropdown = !showPriorityDropdown">
-          Set Priority
+      <!-- Priority inline buttons -->
+      <div class="priority-group">
+        <span class="priority-label">Priority:</span>
+        <button
+          v-for="p in priorities"
+          :key="p"
+          class="priority-btn"
+          :class="p"
+          :title="`Set to ${p}`"
+          @click="handlePriority(p)"
+        >
+          {{ p.charAt(0).toUpperCase() }}
         </button>
-        <div v-if="showPriorityDropdown" class="dropdown">
-          <button
-            v-for="p in priorities"
-            :key="p"
-            class="dropdown-item"
-            @click="handlePriority(p)"
-          >
-            {{ p }}
-          </button>
-        </div>
       </div>
 
       <button class="action-btn" @click="emit('archive')">
-        Archive
+        Archive {{ selectedCount }}
       </button>
 
-      <button class="action-btn danger" @click="emit('delete')">
-        Delete
+      <button class="action-btn danger" @click="requestDelete">
+        Delete {{ selectedCount }}
       </button>
     </div>
+
+    <ConfirmDialog
+      :visible="showDeleteConfirm"
+      title="Delete Tasks"
+      :message="`Are you sure you want to delete ${props.selectedCount} task${props.selectedCount === 1 ? '' : 's'}? This cannot be undone.`"
+      confirm-text="Delete"
+      :danger="true"
+      @confirm="confirmDelete"
+      @cancel="cancelDelete"
+    />
   </div>
 </template>
 
@@ -188,5 +226,59 @@ function handlePriority(priority: string) {
 
 .dropdown-item:hover {
   background: var(--vscode-list-hoverBackground);
+}
+
+/* Priority inline buttons */
+.priority-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.priority-label {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  margin-right: 2px;
+}
+
+.priority-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.1s;
+  opacity: 0.7;
+}
+
+.priority-btn:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.priority-btn.critical {
+  background: var(--priority-critical-bg, #ff6b6b);
+  color: var(--priority-critical-fg, #fff);
+}
+
+.priority-btn.high {
+  background: var(--priority-high-bg, #ffa94d);
+  color: var(--priority-high-fg, #000);
+}
+
+.priority-btn.medium {
+  background: var(--priority-medium-bg, #ffd43b);
+  color: var(--priority-medium-fg, #000);
+}
+
+.priority-btn.low {
+  background: var(--priority-low-bg, #69db7c);
+  color: var(--priority-low-fg, #000);
 }
 </style>

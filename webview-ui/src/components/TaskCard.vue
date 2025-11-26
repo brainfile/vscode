@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Task } from "@brainfile/core";
-import { computed, ref } from "vue";
+import { computed, ref, nextTick } from "vue";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import {
@@ -10,6 +10,7 @@ import {
   Archive,
   Check,
   FileText,
+  Calendar,
 } from "lucide-vue-next";
 import type { AgentType, DetectedAgent } from "../types";
 
@@ -34,10 +35,45 @@ const emit = defineEmits<{
   (e: "send-agent", agentType?: AgentType): void;
   (e: "sendTaskAction"): void;
   (e: "toggle-select"): void;
+  (e: "update-title", title: string): void;
 }>();
 
 const expanded = ref(false);
 
+// Inline title editing
+const isEditingTitle = ref(false);
+const editedTitle = ref("");
+const titleInputRef = ref<HTMLInputElement | null>(null);
+
+function startEditingTitle() {
+  isEditingTitle.value = true;
+  editedTitle.value = props.task.title;
+  nextTick(() => {
+    titleInputRef.value?.focus();
+    titleInputRef.value?.select();
+  });
+}
+
+function saveTitle() {
+  if (editedTitle.value.trim() && editedTitle.value !== props.task.title) {
+    emit("update-title", editedTitle.value.trim());
+  }
+  isEditingTitle.value = false;
+}
+
+function cancelEditTitle() {
+  isEditingTitle.value = false;
+  editedTitle.value = props.task.title;
+}
+
+function handleTitleKeydown(event: KeyboardEvent) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    saveTitle();
+  } else if (event.key === "Escape") {
+    cancelEditTitle();
+  }
+}
 
 // Platform-aware selection hint
 const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
@@ -47,6 +83,7 @@ marked.setOptions({ breaks: true });
 
 // Handle task click - Cmd/Ctrl+click toggles selection, normal click expands
 function handleTaskClick(event: MouseEvent) {
+  if (isEditingTitle.value) return;
   if (event.metaKey || event.ctrlKey) {
     // Cmd/Ctrl+click = toggle selection
     emit("toggle-select");
@@ -67,8 +104,33 @@ const priorityClass = computed(() =>
   props.task.priority ? `priority-${props.task.priority}` : ""
 );
 
+// Subtask progress for collapsed view
+const subtaskProgress = computed(() => {
+  if (!props.task.subtasks?.length) return null;
+  const completed = props.task.subtasks.filter(s => s.completed).length;
+  const total = props.task.subtasks.length;
+  const percent = Math.round((completed / total) * 100);
+  return { completed, total, percent };
+});
 
+// Due date with urgency
+const dueDateInfo = computed(() => {
+  const dueDate = (props.task as any).dueDate;
+  if (!dueDate) return null;
 
+  const due = new Date(dueDate);
+  const now = new Date();
+  const diffDays = Math.ceil((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+  let urgency: "overdue" | "soon" | "future" = "future";
+  if (diffDays < 0) urgency = "overdue";
+  else if (diffDays <= 3) urgency = "soon";
+
+  // Format date
+  const formatted = due.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+  return { formatted, urgency, diffDays };
+});
 
 </script>
 
@@ -94,7 +156,43 @@ const priorityClass = computed(() =>
         <span class="checkmark"></span>
       </label>
       <span v-else class="drag-handle" :title="selectHint"><GripVertical :size="14" :stroke-width="1.75" /></span>
-      <div class="task-title">{{ task.title }}</div>
+
+      <!-- Inline title editing -->
+      <input
+        v-if="isEditingTitle"
+        ref="titleInputRef"
+        v-model="editedTitle"
+        class="title-edit-input"
+        @blur="saveTitle"
+        @keydown="handleTitleKeydown"
+        @click.stop
+      />
+      <div
+        v-else
+        class="task-title"
+        @dblclick.stop="startEditingTitle"
+        title="Double-click to edit"
+      >{{ task.title }}</div>
+
+      <!-- Collapsed info pills -->
+      <div class="task-pills">
+        <span
+          v-if="subtaskProgress && !expanded"
+          class="subtask-pill"
+          :class="{ complete: subtaskProgress.percent === 100 }"
+        >
+          {{ subtaskProgress.completed }}/{{ subtaskProgress.total }}
+        </span>
+        <span
+          v-if="dueDateInfo"
+          class="due-date-pill"
+          :class="dueDateInfo.urgency"
+        >
+          <Calendar :size="10" />
+          {{ dueDateInfo.formatted }}
+        </span>
+      </div>
+
       <div class="task-id" :data-task-id="task.id">
         {{ task.id }}
       </div>
@@ -234,5 +332,75 @@ const priorityClass = computed(() =>
 .task.selected {
   background: var(--vscode-list-activeSelectionBackground);
   border-color: var(--vscode-focusBorder);
+}
+
+/* Inline title editing */
+.title-edit-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  font-size: inherit;
+  font-weight: 500;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 3px;
+  outline: none;
+}
+
+.task-title {
+  cursor: text;
+}
+
+/* Info pills */
+.task-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  margin-right: 8px;
+}
+
+.subtask-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-radius: 8px;
+}
+
+.subtask-pill.complete {
+  background: var(--vscode-charts-green, #4caf50);
+}
+
+.due-date-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 8px;
+  background: var(--vscode-descriptionForeground);
+  color: var(--vscode-editor-background);
+  opacity: 0.8;
+}
+
+.due-date-pill.overdue {
+  background: var(--vscode-errorForeground);
+  opacity: 1;
+}
+
+.due-date-pill.soon {
+  background: var(--vscode-charts-orange, #d18616);
+  opacity: 1;
+}
+
+.due-date-pill.future {
+  background: var(--vscode-descriptionForeground);
+  opacity: 0.6;
 }
 </style>

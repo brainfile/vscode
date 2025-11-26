@@ -96,10 +96,7 @@ export function activate(context: vscode.ExtensionContext) {
 				})
 
 				if (selected) {
-					const uri = vscode.Uri.file(selected.file.absolutePath)
-					const document = await vscode.workspace.openTextDocument(uri)
-					await vscode.window.showTextDocument(document)
-					provider.refresh()
+					await provider.switchFile(selected.file.absolutePath)
 				}
 			}),
 		)

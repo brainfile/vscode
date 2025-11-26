@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { computed } from "vue";
 import type { Column, Task } from "@brainfile/core";
 import TaskCard from "./TaskCard.vue";
 import type { AgentType, DetectedAgent, SortField } from "../types";
 import { SORT_OPTIONS } from "../types";
 import draggable from "vuedraggable";
-import { ArrowUpDown, ChevronDown, Plus } from "lucide-vue-next";
+import { ChevronDown, Plus } from "lucide-vue-next";
 import { useUiStore } from "../store/ui";
 
 const uiStore = useUiStore();
@@ -30,23 +30,6 @@ const localTasks = computed({
   },
 });
 
-const sortDropdownOpen = ref(false);
-const sortDropdownWrapper = ref<HTMLElement | null>(null);
-
-function handleClickOutside(event: MouseEvent) {
-  if (sortDropdownOpen.value && sortDropdownWrapper.value && !sortDropdownWrapper.value.contains(event.target as Node)) {
-    sortDropdownOpen.value = false;
-  }
-}
-
-onMounted(() => {
-  document.addEventListener("click", handleClickOutside);
-});
-
-onUnmounted(() => {
-  document.removeEventListener("click", handleClickOutside);
-});
-
 const emit = defineEmits<{
   (e: "toggle-collapse"): void;
   (e: "add-task"): void;
@@ -62,7 +45,38 @@ const emit = defineEmits<{
   (e: "move-task", payload: { taskId: string; fromColumnId: string; toColumnId: string; toIndex: number }): void;
   (e: "toggle-select", taskId: string): void;
   (e: "send-task-action", payload: { columnId: string; taskId: string }): void;
+  (e: "update-title", payload: { taskId: string; title: string }): void;
 }>();
+
+// Selection state for column
+const allSelected = computed(() => {
+  if (props.tasks.length === 0) return false;
+  return props.tasks.every(t => uiStore.selectedTaskIds.has(t.id));
+});
+
+const someSelected = computed(() => {
+  if (props.tasks.length === 0) return false;
+  const selectedCount = props.tasks.filter(t => uiStore.selectedTaskIds.has(t.id)).length;
+  return selectedCount > 0 && selectedCount < props.tasks.length;
+});
+
+function toggleSelectAll() {
+  if (allSelected.value) {
+    // Deselect all in this column
+    props.tasks.forEach(t => {
+      if (uiStore.selectedTaskIds.has(t.id)) {
+        uiStore.toggleTaskSelection(t.id);
+      }
+    });
+  } else {
+    // Select all in this column
+    props.tasks.forEach(t => {
+      if (!uiStore.selectedTaskIds.has(t.id)) {
+        uiStore.toggleTaskSelection(t.id);
+      }
+    });
+  }
+}
 
 function handleEnd(evt: any) {
   // evt is the native Sortable.js event with from/to DOM elements
@@ -84,31 +98,32 @@ function handleEnd(evt: any) {
   <div class="column-section" :class="{ collapsed }">
     <div class="column-header" @click="emit('toggle-collapse')">
       <div class="column-header-title">
+        <!-- Select all checkbox in selection mode -->
+        <label v-if="uiStore.selectionMode && tasks.length > 0" class="column-select-all" @click.stop>
+          <input
+            type="checkbox"
+            :checked="allSelected"
+            :indeterminate="someSelected"
+            @change="toggleSelectAll"
+          />
+          <span class="checkmark" :class="{ indeterminate: someSelected }"></span>
+        </label>
         <span class="collapse-icon"><ChevronDown :size="12" :stroke-width="1.75" /></span>
         <span>{{ column.title }}</span>
       </div>
       <div class="column-header-right">
-        <div ref="sortDropdownWrapper" class="sort-dropdown-wrapper">
+        <!-- Inline sort toggles -->
+        <div class="sort-toggles" @click.stop>
           <button
-            class="sort-btn"
-            :class="{ active: currentSort !== 'manual' }"
-            title="Sort tasks"
-            @click.stop="sortDropdownOpen = !sortDropdownOpen"
+            v-for="option in SORT_OPTIONS"
+            :key="option.field"
+            class="sort-toggle"
+            :class="{ active: currentSort === option.field }"
+            :title="`Sort by ${option.label}`"
+            @click="emit('set-sort', option.field)"
           >
-            <ArrowUpDown :size="14" />
+            {{ option.field === 'manual' ? '⋮⋮' : option.field === 'priority' ? 'P' : option.field === 'dueDate' ? 'D' : option.field === 'effort' ? 'E' : 'Az' }}
           </button>
-          <div v-if="sortDropdownOpen" class="sort-dropdown" @click.stop>
-            <button
-              v-for="option in SORT_OPTIONS"
-              :key="option.field"
-              class="sort-option"
-              :class="{ selected: currentSort === option.field }"
-              @click="emit('set-sort', option.field); sortDropdownOpen = false"
-            >
-              <span class="sort-option-label">{{ option.label }}</span>
-              <span v-if="option.indicator" class="sort-option-indicator">{{ option.indicator }}</span>
-            </button>
-          </div>
         </div>
         <button class="add-task-btn" :data-column-id="column.id" title="Add task" @click.stop="emit('add-task')">
           <Plus :size="14" />
@@ -145,6 +160,7 @@ function handleEnd(evt: any) {
               @open-file="emit('open-file', $event)"
               @toggle-subtask="emit('toggle-subtask', { taskId: element.id, subtaskId: $event })"
               @send-agent="emit('send-agent', { taskId: element.id, agentType: $event })"
+              @update-title="emit('update-title', { taskId: element.id, title: $event })"
               @toggle-select="emit('toggle-select', element.id)"
               @send-task-action="emit('send-task-action', { columnId: column.id, taskId: element.id })"
             />
@@ -160,80 +176,94 @@ function handleEnd(evt: any) {
 </template>
 
 <style scoped>
-.sort-dropdown-wrapper {
-  position: relative;
-  z-index: 10;
+/* Inline sort toggles */
+.sort-toggles {
+  display: flex;
+  gap: 2px;
+  margin-right: 4px;
 }
 
-.sort-btn {
+.sort-toggle {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 4px;
   border: none;
-  border-radius: 4px;
+  border-radius: 3px;
   background: transparent;
   color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.1s;
+  opacity: 0.6;
 }
 
-.sort-btn:hover {
+.sort-toggle:hover {
   background: var(--vscode-toolbar-hoverBackground);
   color: var(--vscode-foreground);
+  opacity: 1;
 }
 
-.sort-btn.active {
-  color: var(--vscode-focusBorder);
+.sort-toggle.active {
+  background: var(--vscode-focusBorder);
+  color: var(--vscode-editor-background);
+  opacity: 1;
 }
 
-.sort-dropdown {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 9999;
-  min-width: 120px;
-  margin-top: 4px;
-  padding: 4px 0;
-  background: var(--vscode-dropdown-background);
-  border: 1px solid var(--vscode-dropdown-border);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-.sort-option {
+/* Column select all checkbox */
+.column-select-all {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 6px 10px;
-  border: none;
-  background: transparent;
-  color: var(--vscode-dropdown-foreground);
-  font-size: 12px;
-  text-align: left;
   cursor: pointer;
-  transition: background 0.1s;
+  margin-right: 4px;
 }
 
-.sort-option:hover {
-  background: var(--vscode-list-hoverBackground);
+.column-select-all input {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+  height: 0;
+  width: 0;
 }
 
-.sort-option.selected {
-  background: var(--vscode-list-activeSelectionBackground);
-  color: var(--vscode-list-activeSelectionForeground);
+.column-select-all .checkmark {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--vscode-checkbox-border);
+  border-radius: 3px;
+  background: var(--vscode-checkbox-background);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.sort-option-label {
-  flex: 1;
+.column-select-all input:checked ~ .checkmark {
+  background: var(--vscode-checkbox-selectBackground, var(--vscode-focusBorder));
+  border-color: var(--vscode-checkbox-selectBackground, var(--vscode-focusBorder));
 }
 
-.sort-option-indicator {
-  margin-left: 8px;
-  opacity: 0.7;
-  font-size: 11px;
+.column-select-all input:checked ~ .checkmark::after {
+  content: '';
+  width: 4px;
+  height: 8px;
+  border: solid var(--vscode-checkbox-foreground, #fff);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  margin-bottom: 2px;
+}
+
+.column-select-all .checkmark.indeterminate {
+  background: var(--vscode-checkbox-selectBackground, var(--vscode-focusBorder));
+  border-color: var(--vscode-checkbox-selectBackground, var(--vscode-focusBorder));
+}
+
+.column-select-all .checkmark.indeterminate::after {
+  content: '';
+  width: 8px;
+  height: 2px;
+  background: var(--vscode-checkbox-foreground, #fff);
 }
 </style>

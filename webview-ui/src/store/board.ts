@@ -1,4 +1,4 @@
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import type { Board, LintResult } from "@brainfile/core";
 import { defineStore } from "pinia";
 import type {
@@ -12,7 +12,12 @@ import type {
 import { useVSCodeApi } from "../composables/useVSCodeApi";
 import { useUiStore } from "./ui";
 
-const vscode = useVSCodeApi();
+interface PersistedState {
+  collapsedColumns?: Record<string, boolean>;
+  columnSortState?: ColumnSortState;
+}
+
+const vscode = useVSCodeApi<PersistedState>();
 
 
 
@@ -39,13 +44,27 @@ export const useBoardStore = defineStore("board", () => {
   const loading = ref(true);
   const parseWarning = ref<{ message: string; lintResult?: LintResult } | undefined>();
 
-  const collapsedColumns = ref<Record<string, boolean>>({});
-  const columnSortState = ref<ColumnSortState>({});
+  // Load persisted state
+  const savedState = vscode.getState();
+
+  const collapsedColumns = ref<Record<string, boolean>>(savedState?.collapsedColumns ?? {});
+  const columnSortState = ref<ColumnSortState>(savedState?.columnSortState ?? {});
   const availableAgents = ref<DetectedAgent[]>([]);
   const defaultAgent = ref<AgentType | null>(null);
   const lastUsedAgent = ref<AgentType | null>(null);
   const priorityStyles = ref<string | undefined>();
   const availableFiles = ref<AvailableFile[]>([]);
+
+  // Persist column states when they change
+  function persistState() {
+    vscode.setState({
+      collapsedColumns: collapsedColumns.value,
+      columnSortState: columnSortState.value,
+    });
+  }
+
+  watch(collapsedColumns, persistState, { deep: true });
+  watch(columnSortState, persistState, { deep: true });
 
 
 
@@ -147,6 +166,14 @@ export const useBoardStore = defineStore("board", () => {
     sendMessage({ type: "archiveTask", columnId, taskId });
   }
 
+  function restoreTask(taskId: string) {
+    sendMessage({ type: "restoreTask", taskId });
+  }
+
+  function deleteArchivedTask(taskId: string) {
+    sendMessage({ type: "deleteArchivedTask", taskId });
+  }
+
   function completeTask(columnId: string, taskId: string) {
     sendMessage({ type: "completeTask", columnId, taskId });
   }
@@ -157,6 +184,10 @@ export const useBoardStore = defineStore("board", () => {
 
   function updateTitle(title: string) {
     sendMessage({ type: "updateTitle", title });
+  }
+
+  function updateTaskTitle(taskId: string, title: string) {
+    sendMessage({ type: "updateTaskTitle", taskId, title });
   }
 
   function openFile(filePath: string) {
@@ -191,8 +222,16 @@ export const useBoardStore = defineStore("board", () => {
     sendMessage({ type: "addRule", ruleType });
   }
 
+  function addRuleInline(ruleType: string, ruleText: string) {
+    sendMessage({ type: "addRuleInline", ruleType, ruleText });
+  }
+
   function editRule(ruleId: number, ruleType: string) {
     sendMessage({ type: "editRule", ruleId, ruleType });
+  }
+
+  function updateRule(ruleId: number, ruleType: string, ruleText: string) {
+    sendMessage({ type: "updateRule", ruleId, ruleType, ruleText });
   }
 
   function deleteRule(ruleId: number, ruleType: string) {
@@ -279,16 +318,21 @@ export const useBoardStore = defineStore("board", () => {
     editPriority,
     deleteTask,
     archiveTask,
+    restoreTask,
+    deleteArchivedTask,
     completeTask,
     toggleSubtask,
     updateTitle,
+    updateTaskTitle,
     openFile,
     sendToAgent,
     refresh,
     openSettings,
     clearCache,
     addRule,
+    addRuleInline,
     editRule,
+    updateRule,
     deleteRule,
     // Bulk operations
     bulkMoveTasks,

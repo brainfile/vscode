@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from "vue";
-import { Search, X } from "lucide-vue-next";
+import { Search, X, CheckSquare } from "lucide-vue-next";
 import type { FiltersState, FilterOptions } from "../types";
 
 const props = defineProps<{
   filters: FiltersState;
   filterOptions: FilterOptions;
+  filteredTaskCount?: number;
 }>();
 
 const emit = defineEmits<{
   (e: "update:filters", value: Partial<FiltersState>): void;
   (e: "reset"): void;
+  (e: "select-all-filtered"): void;
 }>();
 
 const inputRef = ref<HTMLInputElement | null>(null);
@@ -23,6 +25,46 @@ const MODIFIERS = ["tag:", "priority:", "assignee:"] as const;
 const hasActiveFilters = computed(() => {
   return props.filters.query.length > 0;
 });
+
+// Parse active filter chips from query
+interface FilterChip {
+  type: "tag" | "priority" | "assignee" | "text";
+  value: string;
+  display: string;
+}
+
+const activeChips = computed<FilterChip[]>(() => {
+  const chips: FilterChip[] = [];
+  const parts = props.filters.query.trim().split(/\s+/);
+
+  for (const part of parts) {
+    if (!part) continue;
+    const lowerPart = part.toLowerCase();
+
+    if (lowerPart.startsWith("tag:")) {
+      const value = part.slice(4);
+      if (value) chips.push({ type: "tag", value: part, display: `tag:${value}` });
+    } else if (lowerPart.startsWith("priority:")) {
+      const value = part.slice(9);
+      if (value) chips.push({ type: "priority", value: part, display: `priority:${value}` });
+    } else if (lowerPart.startsWith("assignee:")) {
+      const value = part.slice(9);
+      if (value) chips.push({ type: "assignee", value: part, display: `assignee:${value}` });
+    } else {
+      chips.push({ type: "text", value: part, display: `"${part}"` });
+    }
+  }
+
+  return chips;
+});
+
+const hasMultipleFilters = computed(() => activeChips.value.length > 1);
+
+function removeChip(chip: FilterChip) {
+  const parts = props.filters.query.trim().split(/\s+/);
+  const newParts = parts.filter(p => p !== chip.value);
+  emit("update:filters", { query: newParts.join(" ") });
+}
 
 // Detect if we're currently typing a modifier
 const activeModifier = computed(() => {
@@ -162,7 +204,7 @@ function handleBlur() {
         type="text"
         id="searchInput"
         class="search-input"
-        placeholder="Search..."
+        placeholder="Search / Filter"
         autocomplete="off"
         :value="filters.query"
         @input="updateQuery(($event.target as HTMLInputElement).value)"
@@ -193,12 +235,52 @@ function handleBlur() {
         </div>
       </div>
     </div>
+
+    <!-- Filter chips -->
+    <div v-if="activeChips.length > 0" class="filter-chips">
+      <div
+        v-for="chip in activeChips"
+        :key="chip.value"
+        class="filter-chip"
+        :class="chip.type"
+      >
+        <span class="chip-text">{{ chip.display }}</span>
+        <button class="chip-remove" @click="removeChip(chip)" title="Remove filter">
+          <X :size="10" />
+        </button>
+      </div>
+
+      <button
+        v-if="hasMultipleFilters"
+        class="clear-all-btn"
+        @click="emit('reset')"
+      >
+        Clear all
+      </button>
+
+      <button
+        v-if="filteredTaskCount && filteredTaskCount > 0"
+        class="select-all-btn"
+        @click="emit('select-all-filtered')"
+        :title="`Select all ${filteredTaskCount} filtered tasks`"
+      >
+        <CheckSquare :size="12" />
+        Select {{ filteredTaskCount }}
+      </button>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.search-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .search-container {
   position: relative;
+  width: 100%;
 }
 
 .suggestions-dropdown {
@@ -239,5 +321,101 @@ function handleBlur() {
 
 .suggestion-value {
   color: var(--vscode-foreground);
+}
+
+/* Filter chips */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 8px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-radius: 12px;
+  font-size: 11px;
+}
+
+.filter-chip.tag {
+  background: var(--vscode-charts-blue, #3794ff);
+}
+
+.filter-chip.priority {
+  background: var(--vscode-charts-orange, #d18616);
+}
+
+.filter-chip.assignee {
+  background: var(--vscode-charts-purple, #b180d7);
+}
+
+.filter-chip.text {
+  background: var(--vscode-descriptionForeground);
+  opacity: 0.8;
+}
+
+.chip-text {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.1s;
+}
+
+.chip-remove:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.clear-all-btn {
+  background: transparent;
+  border: none;
+  color: var(--vscode-textLink-foreground);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.clear-all-btn:hover {
+  text-decoration: underline;
+}
+
+.select-all-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 3px 8px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.select-all-btn:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
 }
 </style>
