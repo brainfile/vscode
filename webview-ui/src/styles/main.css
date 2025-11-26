@@ -76,7 +76,7 @@ body {
   color: var(--c-text-muted);
   cursor: pointer;
   padding: var(--space-1) var(--space-2);
-  border-radius: 3px;
+  border-radius: var(--radius);
   font-size: var(--text-sm);
   opacity: 0;
   transition: opacity var(--transition);
@@ -109,6 +109,16 @@ body {
   flex: 1;
 }
 
+.search-icon {
+  position: absolute;
+  left: var(--space-4);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--c-text-muted);
+  opacity: var(--opacity-soft);
+  pointer-events: none;
+}
+
 .template-button {
   background: var(--c-btn-bg);
   color: var(--c-btn-fg);
@@ -134,19 +144,20 @@ body {
 
 .search-input {
   width: 100%;
-  padding: var(--space-3) 32px var(--space-3) var(--space-5);
+  padding: var(--space-3) 32px var(--space-3) 32px;
   background: var(--vscode-editor-background);
   border: 1px solid var(--c-border-input);
   border-radius: var(--radius);
   color: var(--vscode-input-foreground);
   font-size: var(--text-sm);
   font-family: var(--font-sans);
-  outline: none;
-  transition: border-color var(--transition-slow);
+  outline: 1px solid transparent; /* Replaced outline: none; to allow custom shadow */
+  transition: border-color var(--transition-slow), box-shadow var(--transition-slow);
 }
 
 .search-input:focus {
   border-color: var(--c-border-focus);
+  box-shadow: 0 0 0 1px var(--c-border-focus); /* Added subtle focus ring */
 }
 
 .search-input::placeholder {
@@ -287,7 +298,7 @@ body {
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  background: var(--vscode-progressBar-background);
   transition: width var(--transition-slower) var(--ease-out);
   border-radius: 3px;
 }
@@ -371,7 +382,7 @@ body {
 .column-header-right {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-2);
 }
 
 .add-task-btn {
@@ -381,7 +392,7 @@ body {
   opacity: 0;
   cursor: pointer;
   padding: var(--space-1) var(--space-2);
-  border-radius: 3px;
+  border-radius: var(--radius);
   font-size: var(--text-lg);
   transition: opacity var(--transition);
 }
@@ -409,6 +420,8 @@ body {
   font-size: var(--text-xs);
   opacity: var(--opacity-medium);
   font-family: var(--font-mono);
+  min-width: 16px;
+  text-align: right;
 }
 
 /* ===========================================
@@ -423,12 +436,7 @@ body {
   position: relative;
 }
 
-/* Priority as left border - intensity based */
-.task.priority-critical { border-left-color: #ffffff; }
-.task.priority-high { border-left-color: rgba(255, 255, 255, 0.7); }
-.task.priority-medium { border-left-color: rgba(255, 255, 255, 0.4); }
-.task.priority-low { border-left-color: rgba(255, 255, 255, 0.15); }
-.task.priority-unknown { border-left-color: rgba(255, 255, 255, 0.3); }
+
 
 .task:hover {
   background: var(--c-bg-hover);
@@ -536,13 +544,9 @@ body {
 }
 
 .task-assignee {
-  color: var(--c-text-muted);
-  opacity: var(--opacity-soft);
-}
-
-.task-assignee::before {
-  content: '@';
-  opacity: 0.5;
+  color: var(--c-text-link);
+  font-weight: var(--font-medium);
+  opacity: var(--opacity-high);
 }
 
 /* Priority label in metadata row */
@@ -655,7 +659,7 @@ body {
   background: var(--c-bg-dropdown);
   border: 1px solid var(--c-border-dropdown);
   border-radius: var(--radius-md);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-widget);
   z-index: var(--z-modal);
   min-width: 180px;
   padding: var(--space-3) 0;

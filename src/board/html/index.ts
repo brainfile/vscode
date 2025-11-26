@@ -2,5 +2,5 @@
  * HTML generation module for board webview
  */
 
-export * from "./utils";
-export * from "./error";
+export * from "./error"
+export * from "./utils"

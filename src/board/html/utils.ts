@@ -9,12 +9,12 @@
  * @returns HTML-safe string
  */
 export function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+	return text
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#039;")
 }
 
 /**
@@ -23,5 +23,5 @@ export function escapeHtml(text: string): string {
  * @returns CSS-safe class name (e.g., "priority-high", "priority-giga-urgent")
  */
 export function getPriorityClassName(priority: string): string {
-  return `priority-${priority.toLowerCase().replace(/[^a-z0-9]/g, "-")}`;
+	return `priority-${priority.toLowerCase().replace(/[^a-z0-9]/g, "-")}`
 }

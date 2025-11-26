@@ -5,6 +5,25 @@ All notable changes to the Brainfile VSCode extension will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2025-11-25
+
+### Added
+
+#### Bulk Task Operations
+- **Multi-select mode** - Click "Select" button to enter selection mode
+- **Checkbox selection** - Select multiple tasks across columns
+- **Bulk action toolbar** - Appears when tasks are selected
+  - **Move to** - Move selected tasks to any column
+  - **Set Priority** - Change priority on all selected tasks
+  - **Archive** - Archive all selected tasks
+  - **Delete** - Delete all selected tasks
+- Selection count display with clear button
+- Selection mode styling with highlighted selected tasks
+
+### Changed
+- Upgraded to @brainfile/core@^0.7.0 with bulk operation support
+- TaskCard shows checkbox instead of drag handle in selection mode
+
 ## [0.8.0] - 2025-11-23
 
 ### 🎨 Complete UI Rewrite

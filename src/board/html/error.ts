@@ -2,16 +2,16 @@
  * Error page HTML generation
  */
 
-import type { LintResult, LintIssue } from "@brainfile/core";
-import { escapeHtml } from "./utils";
+import type { LintIssue, LintResult } from "@brainfile/core"
+import { escapeHtml } from "./utils"
 
 /**
  * Options for error page generation
  */
 export interface ErrorPageOptions {
-  message: string;
-  details?: string;
-  lintResult?: LintResult;
+	message: string
+	details?: string
+	lintResult?: LintResult
 }
 
 /**
@@ -20,13 +20,13 @@ export interface ErrorPageOptions {
  * @returns Complete HTML document string
  */
 export function generateErrorHtml(options: ErrorPageOptions): string {
-  const { message, details, lintResult } = options;
+	const { message, details, lintResult } = options
 
-  const hasFixableIssues = lintResult?.issues.some((i) => i.fixable) || false;
-  const issuesList = generateIssuesList(lintResult?.issues || []);
-  const fixableCount = lintResult?.issues.filter((i) => i.fixable).length || 0;
+	const hasFixableIssues = lintResult?.issues.some((i) => i.fixable) || false
+	const issuesList = generateIssuesList(lintResult?.issues || [])
+	const fixableCount = lintResult?.issues.filter((i) => i.fixable).length || 0
 
-  return `<!DOCTYPE html>
+	return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -41,26 +41,26 @@ ${getErrorStyles()}
     ${details ? `<div class="error-details">${escapeHtml(details)}</div>` : ""}
 
     ${
-      lintResult && lintResult.issues.length > 0
-        ? `
+			lintResult && lintResult.issues.length > 0
+				? `
     <div class="issues-list">
       <h3>Issues Found (${lintResult.issues.length}):</h3>
       <ul>${issuesList}</ul>
     </div>
     `
-        : ""
-    }
+				: ""
+		}
 
     <div class="action-buttons">
       ${
-        hasFixableIssues
-          ? `
+				hasFixableIssues
+					? `
         <button class="btn btn-primary" id="fix-issues-btn">
           Fix Issues (${fixableCount})
         </button>
       `
-          : ""
-      }
+					: ""
+			}
       <button class="btn btn-secondary" id="refresh-btn">
         Refresh
       </button>
@@ -71,28 +71,28 @@ ${getErrorStyles()}
 ${getErrorScript()}
   </script>
 </body>
-</html>`;
+</html>`
 }
 
 /**
  * Generate HTML list items for lint issues
  */
 function generateIssuesList(issues: LintIssue[]): string {
-  return issues
-    .map((issue) => {
-      const icon = issue.type === "error" ? "❌" : "⚠️";
-      const fixable = issue.fixable ? " [fixable]" : "";
-      const location = issue.line ? ` (line ${issue.line})` : "";
-      return `<li>${icon} ${escapeHtml(issue.message)}${location}${fixable}</li>`;
-    })
-    .join("");
+	return issues
+		.map((issue) => {
+			const icon = issue.type === "error" ? "❌" : "⚠️"
+			const fixable = issue.fixable ? " [fixable]" : ""
+			const location = issue.line ? ` (line ${issue.line})` : ""
+			return `<li>${icon} ${escapeHtml(issue.message)}${location}${fixable}</li>`
+		})
+		.join("")
 }
 
 /**
  * Get CSS styles for error page
  */
 function getErrorStyles(): string {
-  return `    body {
+	return `    body {
       padding: 20px;
       color: var(--vscode-foreground);
       font-family: var(--vscode-font-family);
@@ -164,14 +164,14 @@ function getErrorStyles(): string {
     .btn:disabled {
       opacity: 0.5;
       cursor: not-allowed;
-    }`;
+    }`
 }
 
 /**
  * Get JavaScript for error page interactions
  */
 function getErrorScript(): string {
-  return `    const vscode = acquireVsCodeApi();
+	return `    const vscode = acquireVsCodeApi();
 
     const fixBtn = document.getElementById('fix-issues-btn');
     if (fixBtn) {
@@ -187,5 +187,5 @@ function getErrorScript(): string {
       refreshBtn.addEventListener('click', () => {
         vscode.postMessage({ type: 'refresh' });
       });
-    }`;
+    }`
 }

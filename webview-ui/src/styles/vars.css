@@ -90,11 +90,17 @@
    * RADII
    * =========================================== */
 
-  --radius-sm: 2px;
-  --radius: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
+  --radius-sm: 3px;
+  --radius: 3px;
+  --radius-md: 3px;
+  --radius-lg: 3px;
   --radius-full: 999px;
+
+  /* ===========================================
+   * SHADOWS
+   * =========================================== */
+
+  --shadow-widget: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.15));
 
   /* ===========================================
    * TRANSITIONS

@@ -6,6 +6,9 @@ import type { AgentType, DetectedAgent, SortField } from "../types";
 import { SORT_OPTIONS } from "../types";
 import draggable from "vuedraggable";
 import { ArrowUpDown, ChevronDown, Plus } from "lucide-vue-next";
+import { useUiStore } from "../store/ui";
+
+const uiStore = useUiStore();
 
 const props = defineProps<{
   column: Column;
@@ -16,6 +19,7 @@ const props = defineProps<{
   lastUsedAgent: AgentType | null;
   collapsed: boolean;
   currentSort: SortField;
+
 }>();
 
 // Create a mutable copy for vuedraggable (it needs to mutate arrays for cross-column drag)
@@ -56,6 +60,8 @@ const emit = defineEmits<{
   (e: "toggle-subtask", payload: { taskId: string; subtaskId: string }): void;
   (e: "send-agent", payload: { taskId: string; agentType?: AgentType }): void;
   (e: "move-task", payload: { taskId: string; fromColumnId: string; toColumnId: string; toIndex: number }): void;
+  (e: "toggle-select", taskId: string): void;
+  (e: "send-task-action", payload: { columnId: string; taskId: string }): void;
 }>();
 
 function handleEnd(evt: any) {
@@ -78,7 +84,7 @@ function handleEnd(evt: any) {
   <div class="column-section" :class="{ collapsed }">
     <div class="column-header" @click="emit('toggle-collapse')">
       <div class="column-header-title">
-        <span class="collapse-icon"><ChevronDown :size="12" /></span>
+        <span class="collapse-icon"><ChevronDown :size="12" :stroke-width="1.75" /></span>
         <span>{{ column.title }}</span>
       </div>
       <div class="column-header-right">
@@ -129,6 +135,8 @@ function handleEnd(evt: any) {
               :agents="agents"
               :default-agent="defaultAgent"
               :last-used-agent="lastUsedAgent"
+              :selection-mode="uiStore.selectionMode"
+              :selected="uiStore.selectedTaskIds.has(element.id)"
               @edit="emit('edit-task', element.id)"
               @edit-priority="emit('edit-priority', element.id)"
               @delete="emit('delete-task', { columnId: column.id, taskId: element.id })"
@@ -137,6 +145,8 @@ function handleEnd(evt: any) {
               @open-file="emit('open-file', $event)"
               @toggle-subtask="emit('toggle-subtask', { taskId: element.id, subtaskId: $event })"
               @send-agent="emit('send-agent', { taskId: element.id, agentType: $event })"
+              @toggle-select="emit('toggle-select', element.id)"
+              @send-task-action="emit('send-task-action', { columnId: column.id, taskId: element.id })"
             />
           </div>
         </template>

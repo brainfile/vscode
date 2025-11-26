@@ -22,61 +22,61 @@
  * Defines how to integrate with an AI agent extension
  */
 export interface AgentProvider {
-  /** Unique identifier for this provider */
-  id: string;
+	/** Unique identifier for this provider */
+	id: string
 
-  /** Display name shown in UI */
-  label: string;
+	/** Display name shown in UI */
+	label: string
 
-  /** VS Code extension ID for detection */
-  extensionId?: string;
+	/** VS Code extension ID for detection */
+	extensionId?: string
 
-  /** Alternative detection: match against vscode.env.appName (e.g., "cursor") */
-  appNameMatch?: string;
+	/** Alternative detection: match against vscode.env.appName (e.g., "cursor") */
+	appNameMatch?: string
 
-  /** Priority for default selection (lower = higher priority) */
-  priority: number;
+	/** Priority for default selection (lower = higher priority) */
+	priority: number
 
-  /** Commands to execute, tried in order of preference */
-  commands: {
-    /**
-     * Opens chat panel with prompt as argument
-     * Used by native VS Code chat (Copilot, Cursor)
-     * Example: workbench.action.chat.open
-     */
-    openWithPrompt?: string;
+	/** Commands to execute, tried in order of preference */
+	commands: {
+		/**
+		 * Opens chat panel with prompt as argument
+		 * Used by native VS Code chat (Copilot, Cursor)
+		 * Example: workbench.action.chat.open
+		 */
+		openWithPrompt?: string
 
-    /**
-     * Adds current editor selection to chat context
-     * Used by Cline-family extensions
-     * Example: cline.addToChat
-     */
-    addToContext?: string;
+		/**
+		 * Adds current editor selection to chat context
+		 * Used by Cline-family extensions
+		 * Example: cline.addToChat
+		 */
+		addToContext?: string
 
-    /**
-     * Starts a new task/conversation
-     * Example: cline.plusButtonClicked
-     */
-    newTask?: string;
+		/**
+		 * Starts a new task/conversation
+		 * Example: cline.plusButtonClicked
+		 */
+		newTask?: string
 
-    /**
-     * Focuses the chat input field
-     * Example: cline.focusChatInput
-     */
-    focusInput?: string;
-  };
+		/**
+		 * Focuses the chat input field
+		 * Example: cline.focusChatInput
+		 */
+		focusInput?: string
+	}
 
-  /**
-   * Whether this provider needs a temp document for addToContext commands
-   * If true, we create a temp doc, select all, execute command, then close
-   */
-  needsTempDocument?: boolean;
+	/**
+	 * Whether this provider needs a temp document for addToContext commands
+	 * If true, we create a temp doc, select all, execute command, then close
+	 */
+	needsTempDocument?: boolean
 
-  /**
-   * Delay in ms after opening/focusing before paste (for UI to render)
-   * Default: 100
-   */
-  focusDelay?: number;
+	/**
+	 * Delay in ms after opening/focusing before paste (for UI to render)
+	 * Default: 100
+	 */
+	focusDelay?: number
 }
 
 /**
@@ -93,52 +93,52 @@ export interface AgentProvider {
  * - Continue, Cursor
  */
 export const AGENT_PROVIDERS: AgentProvider[] = [
-  // ============================================================================
-  // Tier 1: Native VS Code Chat API (reliable)
-  // ============================================================================
-  {
-    id: "copilot",
-    label: "GitHub Copilot",
-    extensionId: "github.copilot-chat",
-    priority: 1,
-    commands: {
-      openWithPrompt: "workbench.action.chat.open",
-      newTask: "workbench.action.chat.newChat",
-    },
-  },
-  {
-    id: "claude-code",
-    label: "Claude Code",
-    extensionId: "anthropic.claude-code",
-    priority: 2,
-    commands: {
-      newTask: "claude-vscode.editor.open",
-      focusInput: "claude-vscode.focus",
-    },
-    focusDelay: 400,
-  },
+	// ============================================================================
+	// Tier 1: Native VS Code Chat API (reliable)
+	// ============================================================================
+	{
+		id: "copilot",
+		label: "GitHub Copilot",
+		extensionId: "github.copilot-chat",
+		priority: 1,
+		commands: {
+			openWithPrompt: "workbench.action.chat.open",
+			newTask: "workbench.action.chat.newChat",
+		},
+	},
+	{
+		id: "claude-code",
+		label: "Claude Code",
+		extensionId: "anthropic.claude-code",
+		priority: 2,
+		commands: {
+			newTask: "claude-vscode.editor.open",
+			focusInput: "claude-vscode.focus",
+		},
+		focusDelay: 400,
+	},
 
-  // ============================================================================
-  // Fallback - Always available
-  // ============================================================================
-  {
-    id: "copy",
-    label: "Copy to Clipboard",
-    priority: 99,
-    commands: {},
-  },
-];
+	// ============================================================================
+	// Fallback - Always available
+	// ============================================================================
+	{
+		id: "copy",
+		label: "Copy to Clipboard",
+		priority: 99,
+		commands: {},
+	},
+]
 
 /**
  * Get a provider by ID
  */
 export function getProvider(id: string): AgentProvider | undefined {
-  return AGENT_PROVIDERS.find((p) => p.id === id);
+	return AGENT_PROVIDERS.find((p) => p.id === id)
 }
 
 /**
  * Get all provider IDs
  */
 export function getProviderIds(): string[] {
-  return AGENT_PROVIDERS.map((p) => p.id);
+	return AGENT_PROVIDERS.map((p) => p.id)
 }

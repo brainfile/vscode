@@ -70,7 +70,7 @@ defineProps<{
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  background: var(--vscode-progressBar-background);
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   border-radius: 3px;
 }
@@ -85,7 +85,7 @@ defineProps<{
   flex: 1;
   padding: 8px;
   background: var(--vscode-input-background);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--vscode-panel-border);
 }
 

@@ -1,102 +1,20 @@
-import { computed, ref } from "vue";
-import type { Board, Task, LintResult } from "@brainfile/core";
+import { ref } from "vue";
+import type { Board, LintResult } from "@brainfile/core";
 import { defineStore } from "pinia";
 import type {
   AgentType,
   AvailableFile,
   ColumnSortState,
   DetectedAgent,
-  FilterOptions,
-  FiltersState,
   SortField,
   WebviewToExtensionMessage,
 } from "../types";
 import { useVSCodeApi } from "../composables/useVSCodeApi";
+import { useUiStore } from "./ui";
 
 const vscode = useVSCodeApi();
 
-function matchesFilter(task: Task, filters: FiltersState): boolean {
-  const query = filters.query.trim().toLowerCase();
-  if (query) {
-    const text = `${task.title} ${task.description ?? ""} ${task.assignee ?? ""} ${task.tags?.join(" ") ?? ""}`.toLowerCase();
-    if (!text.includes(query)) {
-      return false;
-    }
-  }
 
-  if (filters.priorities.length > 0 && task.priority) {
-    if (!filters.priorities.includes(task.priority)) {
-      return false;
-    }
-  } else if (filters.priorities.length > 0 && !task.priority) {
-    return false;
-  }
-
-  if (filters.assignees.length > 0) {
-    const assignee = task.assignee ?? "";
-    if (!assignee || !filters.assignees.includes(assignee)) {
-      return false;
-    }
-  }
-
-  if (filters.tags.length > 0) {
-    const taskTags = task.tags ?? [];
-    const hasAll = filters.tags.every((tag) => taskTags.includes(tag));
-    if (!hasAll) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-/** Priority order for sorting (higher priority = lower index) */
-const PRIORITY_ORDER: Record<string, number> = {
-  critical: 0,
-  high: 1,
-  medium: 2,
-  low: 3,
-};
-
-/** Effort order for sorting (larger effort = lower index) */
-const EFFORT_ORDER: Record<string, number> = {
-  xlarge: 0,
-  large: 1,
-  medium: 2,
-  small: 3,
-  trivial: 4,
-};
-
-function sortTasks(tasks: Task[], sortField: SortField): Task[] {
-  if (sortField === "manual") {
-    return tasks; // Keep original order
-  }
-
-  return [...tasks].sort((a, b) => {
-    switch (sortField) {
-      case "priority": {
-        const aPriority = PRIORITY_ORDER[a.priority ?? ""] ?? 999;
-        const bPriority = PRIORITY_ORDER[b.priority ?? ""] ?? 999;
-        return aPriority - bPriority;
-      }
-      case "dueDate": {
-        const aDate = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
-        const bDate = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
-        return aDate - bDate;
-      }
-      case "effort": {
-        const aEffort = EFFORT_ORDER[(a as any).effort ?? ""] ?? 999;
-        const bEffort = EFFORT_ORDER[(b as any).effort ?? ""] ?? 999;
-        return aEffort - bEffort;
-      }
-      case "title": {
-        return a.title.localeCompare(b.title);
-      }
-      default:
-        return 0;
-    }
-  });
-}
 
 function applyPriorityStyles(css?: string) {
   if (typeof document === "undefined") return;
@@ -120,12 +38,7 @@ export const useBoardStore = defineStore("board", () => {
   const board = ref<Board | null>(null);
   const loading = ref(true);
   const parseWarning = ref<{ message: string; lintResult?: LintResult } | undefined>();
-  const filters = ref<FiltersState>({
-    query: "",
-    tags: [],
-    priorities: [],
-    assignees: [],
-  });
+
   const collapsedColumns = ref<Record<string, boolean>>({});
   const columnSortState = ref<ColumnSortState>({});
   const availableAgents = ref<DetectedAgent[]>([]);
@@ -134,42 +47,11 @@ export const useBoardStore = defineStore("board", () => {
   const priorityStyles = ref<string | undefined>();
   const availableFiles = ref<AvailableFile[]>([]);
 
-  const filterOptions = computed<FilterOptions>(() => {
-    const options: FilterOptions = { tags: [], priorities: [], assignees: [] };
-    if (!board.value) return options;
 
-    const tags = new Set<string>();
-    const assignees = new Set<string>();
-    const priorities = new Set<string>();
 
-    board.value.columns.forEach((column) => {
-      column.tasks.forEach((task) => {
-        task.tags?.forEach((tag) => tags.add(tag));
-        if (task.assignee) assignees.add(task.assignee);
-        if (task.priority) priorities.add(task.priority);
-      });
-    });
 
-    options.tags = Array.from(tags).sort();
-    options.assignees = Array.from(assignees).sort();
-    const priorityOrder = ["critical", "high", "medium", "low"];
-    options.priorities = Array.from(priorities).sort(
-      (a, b) => priorityOrder.indexOf(a) - priorityOrder.indexOf(b)
-    );
-    return options;
-  });
 
-  const filteredColumns = computed(() => {
-    if (!board.value) return [];
-    return board.value.columns.map((column) => {
-      const filtered = column.tasks.filter((task) => matchesFilter(task, filters.value));
-      const sortField = columnSortState.value[column.id] ?? "manual";
-      return {
-        ...column,
-        tasks: sortTasks(filtered, sortField),
-      };
-    });
-  });
+
 
   function setBoard(newBoard: Board | null, css?: string) {
     board.value = newBoard;
@@ -198,6 +80,10 @@ export const useBoardStore = defineStore("board", () => {
     sendMessage({ type: "switchFile", absolutePath });
   }
 
+  function switchToFileViaQuickPick() {
+    sendMessage({ type: "triggerQuickPick" });
+  }
+
   function sendMessage(message: WebviewToExtensionMessage) {
     vscode.postMessage(message);
   }
@@ -207,13 +93,7 @@ export const useBoardStore = defineStore("board", () => {
     sendMessage({ type: "getAvailableAgents" });
   }
 
-  function updateFilters(patch: Partial<FiltersState>) {
-    filters.value = { ...filters.value, ...patch };
-  }
 
-  function resetFilters() {
-    filters.value = { query: "", tags: [], priorities: [], assignees: [] };
-  }
 
   function toggleColumnCollapse(columnId: string) {
     collapsedColumns.value[columnId] = !collapsedColumns.value[columnId];
@@ -319,14 +199,62 @@ export const useBoardStore = defineStore("board", () => {
     sendMessage({ type: "deleteRule", ruleId, ruleType });
   }
 
+
+
+  // Bulk operations
+  function bulkMoveTasks(toColumnId: string) {
+    const uiStore = useUiStore();
+    if (uiStore.selectedTaskIds.size === 0) return;
+    sendMessage({
+      type: "bulkMoveTasks",
+      taskIds: Array.from(uiStore.selectedTaskIds),
+      toColumnId,
+    });
+    uiStore.clearSelection();
+  }
+
+  function bulkArchiveTasks() {
+    const uiStore = useUiStore();
+    if (uiStore.selectedTaskIds.size === 0) return;
+    sendMessage({
+      type: "bulkArchiveTasks",
+      taskIds: Array.from(uiStore.selectedTaskIds),
+    });
+    uiStore.clearSelection();
+  }
+
+
+  function bulkDeleteTasks() {
+    const uiStore = useUiStore();
+    if (uiStore.selectedTaskIds.size === 0) return;
+    sendMessage({
+      type: "bulkDeleteTasks",
+      taskIds: Array.from(uiStore.selectedTaskIds),
+    });
+    uiStore.clearSelection();
+  }
+
+  function bulkPatchTasks(patch: { priority?: string; tags?: string[]; assignee?: string }) {
+    const uiStore = useUiStore();
+    if (uiStore.selectedTaskIds.size === 0) return;
+    sendMessage({
+      type: "bulkPatchTasks",
+      taskIds: Array.from(uiStore.selectedTaskIds),
+      patch,
+    });
+    uiStore.clearSelection();
+  }
+
+  function triggerTaskActionQuickPick(columnId: string, taskId: string) {
+    sendMessage({ type: "triggerTaskActionQuickPick", columnId, taskId });
+  }
+
   return {
     board,
     loading,
     parseWarning,
-    filters,
-    filterOptions,
-    filteredColumns,
     collapsedColumns,
+    columnSortState,
     availableAgents,
     defaultAgent,
     lastUsedAgent,
@@ -337,10 +265,9 @@ export const useBoardStore = defineStore("board", () => {
     setAgents,
     setAvailableFiles,
     switchFile,
+    switchToFileViaQuickPick,
     sendMessage,
     requestInitialData,
-    updateFilters,
-    resetFilters,
     toggleColumnCollapse,
     isColumnCollapsed,
     getColumnSort,
@@ -363,5 +290,11 @@ export const useBoardStore = defineStore("board", () => {
     addRule,
     editRule,
     deleteRule,
+    // Bulk operations
+    bulkMoveTasks,
+    bulkArchiveTasks,
+    bulkDeleteTasks,
+    bulkPatchTasks,
+    triggerTaskActionQuickPick,
   };
 });

@@ -6,23 +6,34 @@ import SearchFilter from "./components/SearchFilter.vue";
 import ColumnView from "./components/Column.vue";
 import RulesPanel from "./components/RulesPanel.vue";
 import ArchivePanel from "./components/ArchivePanel.vue";
+import BulkActionBar from "./components/BulkActionBar.vue";
 import { useBoardStore } from "./store/board";
+import { useUiStore } from "./store/ui";
 import type { FiltersState } from "./types";
 
-const store = useBoardStore();
+const boardStore = useBoardStore();
+const uiStore = useUiStore();
+
 const {
   board,
-  filteredColumns,
-  filters,
   parseWarning,
   availableAgents,
   defaultAgent,
   lastUsedAgent,
   loading,
-  availableFiles,
-} = storeToRefs(store);
+} = storeToRefs(boardStore);
 
-const showFileSwitcher = ref(false);
+const {
+  filteredColumns,
+  filters,
+  filterOptions,
+  selectedTaskIds,
+  selectionMode,
+} = storeToRefs(uiStore);
+
+const selectedCount = computed(() => selectedTaskIds.value.size);
+
+
 
 const activeTab = ref<"tasks" | "rules" | "archive">("tasks");
 
@@ -77,12 +88,12 @@ function handleTitleEdit() {
   if (!board.value) return;
   const updated = prompt("Enter new board title", board.value.title);
   if (updated && updated.trim() && updated.trim() !== board.value.title) {
-    store.updateTitle(updated.trim());
+    boardStore.updateTitle(updated.trim());
   }
 }
 
 function handleFiltersUpdate(patch: Partial<FiltersState>) {
-  store.updateFilters(patch);
+  uiStore.updateFilters(patch);
 }
 
 function handleMove(payload: {
@@ -91,7 +102,7 @@ function handleMove(payload: {
   toColumnId: string;
   toIndex: number;
 }) {
-  store.moveTask(
+  boardStore.moveTask(
     payload.taskId,
     payload.fromColumnId,
     payload.toColumnId,
@@ -112,49 +123,70 @@ const fixableCount = computed(() => {
 });
 
 function clearWarning() {
-  store.setParseWarning(undefined, undefined);
-  store.refresh();
+  boardStore.setParseWarning(undefined, undefined);
+  boardStore.refresh();
 }
 
 function attemptFix() {
-  store.sendMessage({ type: 'fix-issues' });
+  boardStore.sendMessage({ type: 'fix-issues' });
 }
 
 function handleAddRule(ruleType: string) {
-  store.addRule(ruleType);
+  boardStore.addRule(ruleType);
 }
 
 function handleEditRule(payload: { ruleId: number; ruleType: string }) {
-  store.editRule(payload.ruleId, payload.ruleType);
+  boardStore.editRule(payload.ruleId, payload.ruleType);
 }
 
 function handleDeleteRule(payload: { ruleId: number; ruleType: string }) {
-  store.deleteRule(payload.ruleId, payload.ruleType);
+  boardStore.deleteRule(payload.ruleId, payload.ruleType);
 }
 
 function handleDeleteTask(payload: { columnId: string; taskId: string }) {
-  store.deleteTask(payload.columnId, payload.taskId);
+  boardStore.deleteTask(payload.columnId, payload.taskId);
 }
 
 function handleArchiveTask(payload: { columnId: string; taskId: string }) {
-  store.archiveTask(payload.columnId, payload.taskId);
+  boardStore.archiveTask(payload.columnId, payload.taskId);
 }
 
 function handleCompleteTask(payload: { columnId: string; taskId: string }) {
-  store.completeTask(payload.columnId, payload.taskId);
+  boardStore.completeTask(payload.columnId, payload.taskId);
 }
 
 function handleSubtask(payload: { taskId: string; subtaskId: string }) {
-  store.toggleSubtask(payload.taskId, payload.subtaskId);
+  boardStore.toggleSubtask(payload.taskId, payload.subtaskId);
 }
 
 function handleAgent(payload: { taskId: string; agentType?: string }) {
-  store.sendToAgent(payload.taskId, payload.agentType as any);
+  boardStore.sendToAgent(payload.taskId, payload.agentType as any);
 }
 
-function handleSwitchFile(absolutePath: string) {
-  showFileSwitcher.value = false;
-  store.switchFile(absolutePath);
+
+
+function handleToggleSelect(taskId: string) {
+  uiStore.toggleTaskSelection(taskId);
+}
+
+function handleBulkMove(columnId: string) {
+  boardStore.bulkMoveTasks(columnId);
+}
+
+function handleBulkArchive() {
+  boardStore.bulkArchiveTasks();
+}
+
+function handleBulkDelete() {
+  boardStore.bulkDeleteTasks();
+}
+
+function handleBulkPriority(priority: string) {
+  boardStore.bulkPatchTasks({ priority });
+}
+
+function handleTaskAction(payload: { columnId: string; taskId: string }) {
+  boardStore.triggerTaskActionQuickPick(payload.columnId, payload.taskId);
 }
 </script>
 
@@ -162,27 +194,13 @@ function handleSwitchFile(absolutePath: string) {
   <div class="app-shell">
     <div class="header-top">
       <div class="board-title-wrapper">
-        <div v-if="availableFiles.length > 1" class="file-switcher">
-          <button
-            class="switcher-btn"
-            :class="{ active: showFileSwitcher }"
-            @click="showFileSwitcher = !showFileSwitcher"
-            title="Switch brainfile (Cmd+Shift+B)"
-          >⇅</button>
-          <div v-if="showFileSwitcher" class="switcher-dropdown">
-            <div
-              v-for="file in availableFiles"
-              :key="file.absolutePath"
-              class="switcher-item"
-              :class="{ current: file.isCurrent }"
-              @click="handleSwitchFile(file.absolutePath)"
-            >
-              <span class="file-name">{{ file.name }}</span>
-              <span class="file-meta">{{ file.itemCount }} items</span>
-              <span v-if="file.isPrivate" class="file-badge">private</span>
-            </div>
-          </div>
-        </div>
+        <button
+          class="board-title-action-btn"
+          title="Switch brainfile (Cmd+Shift+B)"
+          @click="boardStore.switchToFileViaQuickPick()"
+        >
+          ⇅
+        </button>
         <div class="board-title" id="boardTitle">{{ board?.title ?? "Brainfile" }}</div>
         <button class="title-edit-btn" id="titleEditBtn" title="Edit title" @click="handleTitleEdit">✎</button>
       </div>
@@ -236,10 +254,24 @@ function handleSwitchFile(absolutePath: string) {
           :stat-cards="stats.cards"
         />
 
-        <SearchFilter
-          :filters="filters"
-          @update:filters="handleFiltersUpdate"
-          @reset="store.resetFilters"
+        <div class="filter-row">
+          <SearchFilter
+            :filters="filters"
+            :filter-options="filterOptions"
+            @update:filters="handleFiltersUpdate"
+            @reset="uiStore.resetFilters"
+          />
+        </div>
+
+        <BulkActionBar
+          v-if="selectedCount > 0"
+          :selected-count="selectedCount"
+          :columns="board?.columns ?? []"
+          @move="handleBulkMove"
+          @archive="handleBulkArchive"
+          @delete="handleBulkDelete"
+          @clear="uiStore.clearSelection()"
+          @set-priority="handleBulkPriority"
         />
       </div>
 
@@ -253,20 +285,24 @@ function handleSwitchFile(absolutePath: string) {
           :agents="availableAgents"
           :default-agent="defaultAgent"
           :last-used-agent="lastUsedAgent"
-          :collapsed="store.isColumnCollapsed(view.column.id)"
-          :current-sort="store.getColumnSort(view.column.id)"
-          @toggle-collapse="store.toggleColumnCollapse(view.column.id)"
-          @add-task="store.addTaskToColumn(view.column.id)"
-          @set-sort="store.setColumnSort(view.column.id, $event)"
-          @edit-task="store.editTask"
-          @edit-priority="store.editPriority"
+          :collapsed="boardStore.isColumnCollapsed(view.column.id)"
+          :current-sort="boardStore.getColumnSort(view.column.id)"
+          :selection-mode="selectionMode"
+          :selected-task-ids="selectedTaskIds"
+          @toggle-collapse="boardStore.toggleColumnCollapse(view.column.id)"
+          @add-task="boardStore.addTaskToColumn(view.column.id)"
+          @set-sort="boardStore.setColumnSort(view.column.id, $event)"
+          @edit-task="boardStore.editTask"
+          @edit-priority="boardStore.editPriority"
           @delete-task="handleDeleteTask"
           @archive-task="handleArchiveTask"
           @complete-task="handleCompleteTask"
-          @open-file="store.openFile"
+          @open-file="boardStore.openFile"
           @toggle-subtask="handleSubtask"
           @send-agent="handleAgent"
           @move-task="handleMove"
+          @toggle-select="handleToggleSelect"
+          @send-task-action="handleTaskAction"
         />
       </div>
       <div v-else class="empty-state">
@@ -287,7 +323,7 @@ function handleSwitchFile(absolutePath: string) {
 
     <section v-else class="panel">
       <div class="panel-scroll">
-        <ArchivePanel :tasks="board?.archive ?? []" @open-file="store.openFile" />
+        <ArchivePanel :tasks="board?.archive ?? []" @open-file="boardStore.openFile" />
       </div>
     </section>
   </div>
@@ -422,7 +458,7 @@ function handleSwitchFile(absolutePath: string) {
   color: var(--vscode-button-foreground);
   border: none;
   padding: 6px 12px;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 12px;
   font-weight: 500;
@@ -437,8 +473,7 @@ function handleSwitchFile(absolutePath: string) {
   background: transparent;
   border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
   color: var(--vscode-button-foreground);
-  padding: 6px 12px;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 12px;
   white-space: nowrap;
@@ -448,17 +483,11 @@ button {
   font-family: inherit;
 }
 
-/* File Switcher */
-.file-switcher {
-  position: relative;
-  margin-right: 4px;
-}
-
-.switcher-btn {
+.board-title-action-btn {
   padding: 2px 6px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--vscode-descriptionForeground);
   cursor: pointer;
   font-size: 14px;
@@ -466,68 +495,20 @@ button {
   line-height: 1;
 }
 
-.switcher-btn:hover,
-.switcher-btn.active {
+.board-title-action-btn:hover {
   background: var(--vscode-toolbar-hoverBackground);
   color: var(--vscode-foreground);
   border-color: var(--vscode-panel-border);
 }
 
-.switcher-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 4px;
-  min-width: 200px;
-  max-width: 300px;
-  background: var(--vscode-dropdown-background);
-  border: 1px solid var(--vscode-dropdown-border);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  z-index: 100;
-  overflow: hidden;
-}
-
-.switcher-item {
+/* Filter row with select button */
+.filter-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  cursor: pointer;
-  transition: background 0.1s;
 }
 
-.switcher-item:hover {
-  background: var(--vscode-list-hoverBackground);
-}
-
-.switcher-item.current {
-  background: var(--vscode-list-activeSelectionBackground);
-  color: var(--vscode-list-activeSelectionForeground);
-}
-
-.file-name {
+.filter-row > :first-child {
   flex: 1;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.file-meta {
-  font-size: 10px;
-  color: var(--vscode-descriptionForeground);
-  white-space: nowrap;
-}
-
-.file-badge {
-  font-size: 9px;
-  padding: 2px 4px;
-  background: var(--vscode-badge-background);
-  color: var(--vscode-badge-foreground);
-  border-radius: 3px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 </style>

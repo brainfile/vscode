@@ -43,6 +43,7 @@ export interface AvailableFile {
   itemCount: number;
   isPrivate: boolean;
   isCurrent: boolean;
+  isBlank: boolean;
 }
 
 export interface AvailableFilesMessage {
@@ -84,7 +85,15 @@ export interface WebviewCommandMessage {
     | "sendToAgent"
     | "getAvailableAgents"
     | "switchFile"
-    | "getAvailableFiles";
+    | "triggerQuickPick"
+    | "triggerTaskActionQuickPick"
+    | "openFilePicker"
+    | "getAvailableFiles"
+    // Bulk operations
+    | "bulkMoveTasks"
+    | "bulkArchiveTasks"
+    | "bulkDeleteTasks"
+    | "bulkPatchTasks";
   [key: string]: unknown;
 }
 
