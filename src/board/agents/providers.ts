@@ -87,10 +87,11 @@ export interface AgentProvider {
  * Currently supported (Tier 1 - reliable native APIs):
  * - GitHub Copilot (native VS Code chat API)
  * - Claude Code (native VS Code chat API)
+ * - Cursor (native chat, detected by app name)
  *
  * Future consideration (Tier 2 - requires more research):
  * - Cline, Roo Code, Kilo Code (Cline forks)
- * - Continue, Cursor
+ * - Continue
  */
 export const AGENT_PROVIDERS: AgentProvider[] = [
 	// ============================================================================
@@ -116,6 +117,16 @@ export const AGENT_PROVIDERS: AgentProvider[] = [
 			focusInput: "claude-vscode.focus",
 		},
 		focusDelay: 400,
+	},
+	{
+		id: "cursor",
+		label: "Cursor",
+		appNameMatch: "cursor",
+		priority: 3,
+		commands: {
+			openWithPrompt: "workbench.action.chat.open",
+			newTask: "workbench.action.chat.newChat",
+		},
 	},
 
 	// ============================================================================
