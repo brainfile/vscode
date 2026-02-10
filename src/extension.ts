@@ -498,8 +498,8 @@ function registerCodeLensCommands(context: vscode.ExtensionContext, boardProvide
 						detail: agent.id,
 					}))
 					agentItems.push({
-						label: "$(clippy) Copy to Clipboard",
-						description: "Copy prompt to clipboard",
+						label: "$(clippy) Copy Prompt",
+						description: "Copy to clipboard",
 						detail: "copy",
 					})
 
