@@ -2118,7 +2118,7 @@ columns:
 				items.push({ kind: vscode.QuickPickItemKind.Separator, label: "Send to Agent" } as any) // Type assertion due to kind property
 				availableAgents.forEach((agent) => {
 					items.push({
-						label: `$(debug-start) ${agent.label}`,
+						label: `$(${agent.icon ?? "debug-start"}) ${agent.label}`,
 						description: agent.type === agentRegistry.getDefaultAgent() ? "Default" : undefined,
 						action: "send-agent",
 						agentType: agent.type,

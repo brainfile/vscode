@@ -492,10 +492,10 @@ function registerCodeLensCommands(context: vscode.ExtensionContext, boardProvide
 					const availableAgents = registry.getAvailableAgents()
 					const defaultAgentId = registry.getDefaultAgent()
 
-					const agentItems: vscode.QuickPickItem[] = availableAgents.map((a) => ({
-						label: `$(debug-start) ${a.label}`,
-						description: a.id === defaultAgentId ? "Default" : undefined,
-						detail: a.id,
+					const agentItems: vscode.QuickPickItem[] = availableAgents.map((agent) => ({
+						label: `$(${agent.icon ?? "debug-start"}) ${agent.label}`,
+						description: agent.id === defaultAgentId ? "Default" : undefined,
+						detail: agent.id,
 					}))
 					agentItems.push({
 						label: "$(clippy) Copy to Clipboard",

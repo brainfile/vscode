@@ -28,6 +28,9 @@ export interface AgentProvider {
 	/** Display name shown in UI */
 	label: string
 
+	/** VS Code Codicon name for UI (e.g. "comment-discussion", "terminal", "hubot"). Optional. */
+	icon?: string
+
 	/** VS Code extension ID for detection */
 	extensionId?: string
 
@@ -100,6 +103,7 @@ export const AGENT_PROVIDERS: AgentProvider[] = [
 	{
 		id: "copilot",
 		label: "GitHub Copilot",
+		icon: "comment-discussion",
 		extensionId: "github.copilot-chat",
 		priority: 1,
 		commands: {
@@ -110,6 +114,7 @@ export const AGENT_PROVIDERS: AgentProvider[] = [
 	{
 		id: "claude-code",
 		label: "Claude Code",
+		icon: "hubot",
 		extensionId: "anthropic.claude-code",
 		priority: 2,
 		commands: {
@@ -121,6 +126,7 @@ export const AGENT_PROVIDERS: AgentProvider[] = [
 	{
 		id: "cursor",
 		label: "Cursor",
+		icon: "terminal",
 		appNameMatch: "cursor",
 		priority: 3,
 		commands: {
@@ -135,6 +141,7 @@ export const AGENT_PROVIDERS: AgentProvider[] = [
 	{
 		id: "copy",
 		label: "Copy to Clipboard",
+		icon: "clippy",
 		priority: 99,
 		commands: {},
 	},

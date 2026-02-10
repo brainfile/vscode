@@ -253,6 +253,7 @@ export class AgentRegistry {
 			id: provider.id,
 			type: provider.id, // Webview uses 'type' field
 			label: provider.label,
+			icon: provider.icon,
 			available: isProviderAvailable(provider),
 			priority: provider.priority,
 		}))
