@@ -463,14 +463,19 @@ export class BoardEditorPanel {
 	// Agent detection methods - using AgentRegistry
 	private _postAvailableAgents() {
 		const registry = getAgentRegistry()
-
-		// Sync last used from workspace state
-		if (this._lastUsedAgent) {
-			registry.setLastUsed(this._lastUsedAgent)
-		}
-
 		const agents = registry.getAvailableAgents()
 		const defaultAgent = registry.getDefaultAgent()
+		const availableIds = new Set(agents.map((agent) => agent.id))
+
+		// Only use saved last-used if that agent is currently available (e.g. Cursor has no Copilot)
+		if (this._lastUsedAgent && availableIds.has(this._lastUsedAgent)) {
+			registry.setLastUsed(this._lastUsedAgent)
+		} else {
+			this._lastUsedAgent = defaultAgent
+			registry.setLastUsed(defaultAgent)
+			this._context.workspaceState.update("brainfile.lastUsedAgent", defaultAgent)
+		}
+
 		this._panel.webview.postMessage({
 			type: "agentsDetected",
 			agents,

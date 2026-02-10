@@ -14,7 +14,7 @@ import {
 describe("board/types", () => {
 	describe("AgentType constants", () => {
 		it("AGENT_TYPES contains all expected agents", () => {
-			expect(AGENT_TYPES).toEqual(["copilot", "claude-code", "copy"])
+			expect(AGENT_TYPES).toEqual(["copilot", "claude-code", "cursor", "copy"])
 		})
 
 		it("AGENT_LABELS has label for each agent type", () => {

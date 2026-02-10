@@ -98,14 +98,21 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
 	private postAvailableAgents() {
 		if (!this._view) return
 		const registry = getAgentRegistry()
-
-		// Sync last used from workspace state
-		if (this._lastUsedAgent) {
-			registry.setLastUsed(this._lastUsedAgent)
-		}
-
 		const agents = registry.getAvailableAgents()
 		const defaultAgent = registry.getDefaultAgent()
+		const availableIds = new Set(agents.map((agent) => agent.id))
+
+		// Only use saved last-used if that agent is currently available (e.g. Cursor has no Copilot)
+		if (this._lastUsedAgent && availableIds.has(this._lastUsedAgent)) {
+			registry.setLastUsed(this._lastUsedAgent)
+		} else {
+			this._lastUsedAgent = defaultAgent
+			registry.setLastUsed(defaultAgent)
+			if (this._context) {
+				this._context.workspaceState.update("brainfile.lastUsedAgent", defaultAgent)
+			}
+		}
+
 		this._view.webview.postMessage({
 			type: "agentsDetected",
 			agents,
@@ -2111,7 +2118,7 @@ columns:
 				items.push({ kind: vscode.QuickPickItemKind.Separator, label: "Send to Agent" } as any) // Type assertion due to kind property
 				availableAgents.forEach((agent) => {
 					items.push({
-						label: `$(debug-start) ${agent.label}`,
+						label: `$(${agent.icon ?? "debug-start"}) ${agent.label}`,
 						description: agent.type === agentRegistry.getDefaultAgent() ? "Default" : undefined,
 						action: "send-agent",
 						agentType: agent.type,

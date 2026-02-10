@@ -28,6 +28,9 @@ export interface AgentProvider {
 	/** Display name shown in UI */
 	label: string
 
+	/** VS Code Codicon name for UI (e.g. "comment-discussion", "terminal", "hubot"). Optional. */
+	icon?: string
+
 	/** VS Code extension ID for detection */
 	extensionId?: string
 
@@ -87,10 +90,11 @@ export interface AgentProvider {
  * Currently supported (Tier 1 - reliable native APIs):
  * - GitHub Copilot (native VS Code chat API)
  * - Claude Code (native VS Code chat API)
+ * - Cursor (native chat, detected by app name)
  *
  * Future consideration (Tier 2 - requires more research):
  * - Cline, Roo Code, Kilo Code (Cline forks)
- * - Continue, Cursor
+ * - Continue
  */
 export const AGENT_PROVIDERS: AgentProvider[] = [
 	// ============================================================================
@@ -99,6 +103,7 @@ export const AGENT_PROVIDERS: AgentProvider[] = [
 	{
 		id: "copilot",
 		label: "GitHub Copilot",
+		icon: "comment-discussion",
 		extensionId: "github.copilot-chat",
 		priority: 1,
 		commands: {
@@ -109,6 +114,7 @@ export const AGENT_PROVIDERS: AgentProvider[] = [
 	{
 		id: "claude-code",
 		label: "Claude Code",
+		icon: "hubot",
 		extensionId: "anthropic.claude-code",
 		priority: 2,
 		commands: {
@@ -117,6 +123,17 @@ export const AGENT_PROVIDERS: AgentProvider[] = [
 		},
 		focusDelay: 400,
 	},
+	{
+		id: "cursor",
+		label: "Cursor",
+		icon: "terminal",
+		appNameMatch: "cursor",
+		priority: 3,
+		commands: {
+			openWithPrompt: "workbench.action.chat.open",
+			newTask: "workbench.action.chat.newChat",
+		},
+	},
 
 	// ============================================================================
 	// Fallback - Always available
@@ -124,6 +141,7 @@ export const AGENT_PROVIDERS: AgentProvider[] = [
 	{
 		id: "copy",
 		label: "Copy to Clipboard",
+		icon: "clippy",
 		priority: 99,
 		commands: {},
 	},

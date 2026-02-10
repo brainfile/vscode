@@ -5,6 +5,18 @@ All notable changes to the Brainfile VSCode extension will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3] - 2026-02-10
+
+### Added
+
+#### Send to Agent — Cursor
+- **Cursor** added as Tier 1 agent: native chat via `workbench.action.chat.open`, detected by app name
+
+### Fixed
+
+#### Last-used agent selection
+- When saved "last used" agent is not available in current environment (e.g. Copilot in Cursor), extension now falls back to default agent and persists it instead of leaving invalid selection
+
 ## [0.10.1] - 2025-11-26
 
 ### Fixed

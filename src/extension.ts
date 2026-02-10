@@ -9,7 +9,7 @@ import {
 	type Task,
 } from "@brainfile/core"
 import * as vscode from "vscode"
-import { buildAgentPrompt } from "./board"
+import { buildAgentPrompt, getAgentRegistry } from "./board"
 import { BoardEditorPanel, BoardEditorPanelSerializer } from "./boardEditorPanel"
 import { BoardViewProvider } from "./boardViewProvider"
 import { BrainfileCodeLensProvider } from "./codeLensProvider"
@@ -488,45 +488,43 @@ function registerCodeLensCommands(context: vscode.ExtensionContext, boardProvide
 						task: targetTask,
 					})
 
-					// Show quick pick to choose agent
-					const agents = [
-						{ label: "$(comment-discussion) Copilot", description: "Send to GitHub Copilot Chat", agent: "copilot" },
-						{ label: "$(terminal) Cursor", description: "Send to Cursor AI", agent: "cursor" },
-						{ label: "$(hubot) Claude Code", description: "Send to Claude Code terminal", agent: "claude-code" },
-						{ label: "$(clippy) Copy Prompt", description: "Copy to clipboard", agent: "copy" },
-					]
+					const registry = getAgentRegistry()
+					const availableAgents = registry.getAvailableAgents()
+					const defaultAgentId = registry.getDefaultAgent()
 
-					const selected = await vscode.window.showQuickPick(agents, {
+					const agentItems: vscode.QuickPickItem[] = availableAgents.map((agent) => ({
+						label: `$(${agent.icon ?? "debug-start"}) ${agent.label}`,
+						description: agent.id === defaultAgentId ? "Default" : undefined,
+						detail: agent.id,
+					}))
+					agentItems.push({
+						label: "$(clippy) Copy Prompt",
+						description: "Copy to clipboard",
+						detail: "copy",
+					})
+
+					const selected = await vscode.window.showQuickPick(agentItems, {
 						placeHolder: "Choose where to send the task",
 					})
 
-					if (!selected) return
+					if (!selected || !selected.detail) return
 
-					// Send to the selected agent
-					switch (selected.agent) {
-						case "copilot":
-						case "cursor":
-							try {
-								await vscode.commands.executeCommand("workbench.action.chat.newChat")
-								await new Promise((resolve) => setTimeout(resolve, 100))
-								await vscode.commands.executeCommand("workbench.action.chat.open", prompt)
-							} catch (_err) {
-								await vscode.env.clipboard.writeText(prompt)
-								vscode.window.showInformationMessage("Prompt copied. Paste into chat.")
-							}
-							break
+					const agentId = selected.detail
 
-						case "claude-code": {
-							const escapedPrompt = prompt.replace(/"/g, '\\"').replace(/\n/g, "\\n")
-							const terminal = vscode.window.createTerminal("Claude Code")
-							terminal.show()
-							terminal.sendText(`claude "${escapedPrompt}"`)
-							break
-						}
-						default:
-							await vscode.env.clipboard.writeText(prompt)
-							vscode.window.showInformationMessage("Prompt copied to clipboard.")
-							break
+					// Claude Code: send to terminal (legacy CodeLens behavior)
+					if (agentId === "claude-code") {
+						const escapedPrompt = prompt.replace(/"/g, '\\"').replace(/\n/g, "\\n")
+						const terminal = vscode.window.createTerminal("Claude Code")
+						terminal.show()
+						terminal.sendText(`claude "${escapedPrompt}"`)
+						return
+					}
+
+					const result = await registry.sendToAgent(agentId, prompt)
+					if (!result.success) {
+						vscode.window.showErrorMessage(result.message || "Failed to send to agent")
+					} else if (result.copiedToClipboard && result.message) {
+						vscode.window.showInformationMessage(result.message)
 					}
 				} catch (error) {
 					vscode.window.showErrorMessage(`Failed to send to agent: ${error}`)

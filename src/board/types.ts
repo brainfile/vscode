@@ -21,6 +21,8 @@ export interface DetectedAgent {
 	id: string
 	type: string // Same as id, for webview compatibility
 	label: string
+	/** VS Code Codicon name for UI. Optional. */
+	icon?: string
 	available: boolean
 	priority: number
 }
