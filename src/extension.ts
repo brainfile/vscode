@@ -510,6 +510,16 @@ function registerCodeLensCommands(context: vscode.ExtensionContext, boardProvide
 					if (!selected || !selected.detail) return
 
 					const agentId = selected.detail
+
+					// Claude Code: send to terminal (legacy CodeLens behavior)
+					if (agentId === "claude-code") {
+						const escapedPrompt = prompt.replace(/"/g, '\\"').replace(/\n/g, "\\n")
+						const terminal = vscode.window.createTerminal("Claude Code")
+						terminal.show()
+						terminal.sendText(`claude "${escapedPrompt}"`)
+						return
+					}
+
 					const result = await registry.sendToAgent(agentId, prompt)
 					if (!result.success) {
 						vscode.window.showErrorMessage(result.message || "Failed to send to agent")
