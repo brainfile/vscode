@@ -17,3 +17,6 @@ esbuild.js
 *.vsix
 webview-ui/**
 coverage/**
+.claude/**
+.gemini/**
+brainfile.md
